@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=61.0.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+# This is the name your package will be known by on PyPI and in imports
+name = "Payjar"
+version = "0.1.0"
+authors = [
+    {name = "Femn0x", email = "lucawinecjer@gmail.com"},
+]
+description = "A short description of your Payjar package."
+readme = "README.md" # If you have a README file
+requires-python = ">=3.8"
+keywords = ["payment", "utility", "library"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+
+[project.urls]
+Homepage = "https://github.com/femnox/Payjar"
+Issues = "https://github.com/femn0x/Payjar/issues"
+
+[tool.setuptools.packages]
+# This tells setuptools to find all packages (i.e., directories with an __init__.py)
+# If you only have one package (Payjar), this is safe.
+find = {}
