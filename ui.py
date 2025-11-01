@@ -1,7 +1,7 @@
 import tkinter as tk
 from tkinter import filedialog,messagebox
-from esolangInter import *
-from syntax import *
+from .esolangInter import *
+from .syntax import *
 class Window:
     def __init__(self,w,h):
         self.root=tk.Tk()

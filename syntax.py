@@ -1,4 +1,4 @@
-from esolangInter import *
+from .esolangInter import *
 import tkinter as tk
 """WIP sytax highlighter for Payjar language"""
 class Logic:
