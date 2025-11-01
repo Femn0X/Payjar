@@ -1,6 +1,6 @@
 @echo off
 :: === Configuration ===
-set "REPO_URL=https://github.com/username/repository-name.git"
+set "REPO_URL=https://github.com/femn0x/Payjar.git"
 set "CLONE_DIR=%USERPROFILE%\Documents\GitClones"
 
 :: === Script ===
