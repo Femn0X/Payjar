@@ -2,7 +2,7 @@
 # === GitHub Repo Auto-Cloner ===
 
 # === Configuration ===
-REPO_URL="https://github.com/username/repository-name.git"
+REPO_URL="https://github.com/femn0x/Payjar.git"
 CLONE_DIR="$HOME/Documents/GitClones"
 
 echo
