@@ -1,4 +1,4 @@
-from .ui import *
+from Payjar.ui import *
 def createWindow_test(w,h):
   Window(w,h)
 createWindow_test(1000,1000)
