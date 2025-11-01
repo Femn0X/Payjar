@@ -1,4 +1,5 @@
 from .esolangInter import *
+from typing import List,Dict,Union
 import tkinter as tk
 """WIP sytax highlighter for Payjar language"""
 class Logic:
@@ -68,7 +69,7 @@ class Logic:
     elif token.type=='NUMBER':return {'type':'text','color':text}
     else:raise Exception(f'Unknown Token: {token}')
 class SytaxHighlight:
-    def __init__(self,data:Logic|list[dict]):
+    def __init__(self,data:Union['Logic',List[Dict[str,str]]]):
         self.data=data
     def __repr__(self):
         for e in self.data:
