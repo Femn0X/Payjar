@@ -1,4 +1,4 @@
-from Payjar.ui import Window, PJRT  # absolute import works fine in GitHub Actions
+from ui import Window, PJRT  # absolute import works fine in GitHub Actions
 
 def createWindow_test(w, h):
     Window(w, h)
