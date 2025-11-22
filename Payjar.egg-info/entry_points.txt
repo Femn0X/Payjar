@@ -1,0 +1,2 @@
+[console_scripts]
+payjar-ui = __main__:createWindow
