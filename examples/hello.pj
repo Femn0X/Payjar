@@ -1,0 +1,9 @@
+// Sample Payjar Program - Hello World
+public class main(@self){
+func main() {
+    println("Hello, Payjar!");
+    println("Welcome to the Payjar IDE");
+}
+// Call the main function
+main();
+}
