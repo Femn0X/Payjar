@@ -1045,37 +1045,36 @@ class PJRT:
            
        except Exception as e:print(f"Error during PJRT: {e}")
        return tokens,ast
-class PJS:
-    def __init__(self,code,textin):
-        re=[]
-        tokens,ast=PJRT(code,1).run_code(0)
-        comp=Comp(tokens,textin)
-        self.compRe=comp.parse()
-        self.ast=ast
-    def interpret(self, ast):
-       """Starts the interpretation process from the main AST node."""
-       if ast["type"] == "main_definition":
-           for statement in ast["body"]:
-               if statement["type"] == "function_definition":self.visit(statement)
-               elif statement["type"] == "class_definition":self.visit(statement)
-           # Second pass: Execute statements in main body
-           for statement in ast["body"]:
-               if statement["type"] not in ("function_definition", "class_definition"):
-                   try:self.visit(statement)
-                   except FunctionReturn as e:print(f"Warning: Return statement encountered in main body. Value: {e.value}")
-       else:raise Exception(f"Runtime Error: Unsupported AST type for interpretation: {ast['type']}")
-    def visit(self, node):
-       node_type = node["type"]
-       if node_type == "print_statement":self.visit_print_statement(node)
-       elif node_type=='literal':return node['prompt'],node['value']
-       elif node_type=="variable_access":return self.visit_variable_access(node)
-       else:pass
-    def visit_print_statement(self,node):
-        return node['expression']
-    def visit_variable_access(self,node):
-        name=self.ast['body'][0]['name']
-        value_node=self.ast['body'][0]['value']
-        value=value_node['value']
-        return value
-    def __str__(self):
-        return f'Output:{self.interpret(self.ast)},{self.compRe}'
+def PJS(code, textin):
+    """Functional runtime entrypoint.
+
+    Parses `code`, runs the interpreter while capturing printed output,
+    and returns a deterministic string containing the captured output
+    and the parsed `Comp` result for the provided `textin`.
+    """
+    from io import StringIO
+    import contextlib
+
+    try:
+        # Lex + parse to AST
+        lexer = Lexer(code)
+        tokens = lexer.tokenize()
+        parser = Parser(tokens)
+        ast = parser.parse()
+
+        # Build Comp result (uses text input for readln semantics)
+        comp = Comp(tokens, textin)
+        comp_re = comp.parse()
+
+        # Run interpreter and capture printed output
+        interpreter = Interpreter()
+        buf = StringIO()
+        with contextlib.redirect_stdout(buf):
+            interpreter.interpret(ast)
+        output = buf.getvalue()
+
+        # Return a deterministic string for the UI
+        return f"Output:{output}\nCompParse:{repr(comp_re)}"
+    except Exception:
+        # Re-raise so callers (UI) can handle and present errors
+        raise
