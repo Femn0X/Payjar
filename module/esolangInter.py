@@ -50,6 +50,8 @@ class Parser:
            elif self.current_token.type == 'DEF':statements.append(self.parse_function_definition())
            elif self.current_token.type == 'PUBLIC':statements.append(self.parse_public_class_definition())
            elif self.current_token.type == 'CLASS':statements.append(self.parse_class_definition())
+           elif self.current_token.type == 'IF':statements.append(self.parse_if_statement())
+        elif self.current_token.type == 'WHILE':statements.append(self.parse_while_statement())
            elif self.current_token.type == 'IDENTIFIER':
                peek_token_idx = self.token_index + 1
                if peek_token_idx < len(self.tokens) and self.tokens[peek_token_idx].type == 'EQUAL':statements.append(self.parse_assignment_statement())
@@ -330,6 +332,60 @@ class Parser:
            while self.current_token and self.current_token.type == 'COMMA':self.eat('COMMA');arguments.append(self.parse_expression())
        self.eat('RPAREN')
        return {"type": "object_creation", "class_name": class_name, "arguments": arguments}
+   def parse_if_statement(self):
+    self.eat('IF')
+    self.eat('LPAREN')
+    condition = self.parse_expression()
+    self.eat('RPAREN')
+    self.eat('LBRACE')
+
+    then_body = []
+    while self.current_token and self.current_token.type != 'RBRACE':
+        then_body.append(self.parse_main_body()[0])
+    self.eat('RBRACE')
+
+    else_if_blocks = []
+    else_body = None
+
+    while self.current_token and self.current_token.type == 'ELSE':
+        self.eat('ELSE')
+        if self.current_token.type == 'IF':
+            self.eat('IF')
+            self.eat('LPAREN')
+            elif_cond = self.parse_expression()
+            self.eat('RPAREN')
+            self.eat('LBRACE')
+
+            elif_body = []
+            while self.current_token and self.current_token.type != 'RBRACE':
+                elif_body.append(self.parse_main_body()[0])
+            self.eat('RBRACE')
+
+            else_if_blocks.append({
+                "condition": elif_cond,
+                "body": elif_body
+            })
+        else:
+            self.eat('LBRACE')
+            else_body = []
+            while self.current_token and self.current_token.type != 'RBRACE':
+                else_body.append(self.parse_main_body()[0])
+            self.eat('RBRACE')
+            break
+    return {"type": "if_statement","condition": condition,"then": then_body,"else_if": else_if_blocks,"else": else_body}
+   def parse_while_statement(self):
+    self.eat('WHILE')
+    self.eat('LPAREN')
+    condition = self.parse_expression()
+    self.eat('RPAREN')
+    self.eat('LBRACE')
+
+    body = []
+    while self.current_token and self.current_token.type != 'RBRACE':
+        body.append(self.parse_main_body()[0])
+    self.eat('RBRACE')
+
+    return {"type": "while_statement","condition": condition,"body": body} 
    def parse(self):
        """Starts the parsing process for the entire program."""
        return self.parse_main()
@@ -398,6 +454,9 @@ class Lexer:
                elif identifier == 'new': return Token('NEW', 'new')
                elif identifier == 'readln': return Token('READLN', 'readln')
                elif identifier == 'return': return Token('RETURN', 'return')
+               elif identifier == 'if': return Token('IF', 'if')
+               elif identifier == 'else': return Token('ELSE', 'else')
+               elif identifier == 'while': return Token('WHILE', 'while')
                else: return Token('IDENTIFIER', identifier)
            # Arithmetic Operators
            if self.current_char == '+': self.advance(); return Token('PLUS', '+')
@@ -541,6 +600,9 @@ class Interpreter:
        elif node_type == "member_assignment":self.visit_member_assignment(node, current_instance)
        elif node_type == "binary_op":return self.visit_binary_op(node)
        elif node_type == "unary_op":return self.visit_unary_op(node)
+       elif node_type == "if_statement":self.visit_if_statement(node)
+       elif node_type == "while_statement":self.visit_while_statement(node)
+
        elif node_type == "field_declaration":pass # Field declarations are handled during object creation
        else:raise Exception(f"Runtime Error: Unknown AST node type: {node_type}")
    def visit_print_statement(self, node):
@@ -698,6 +760,25 @@ class Interpreter:
        if operator == '+':return +operand_val
        elif operator == '-':return -operand_val
        else:raise Exception(f"Runtime Error: Unsupported unary operator: {operator}")
+   def visit_while_statement(self, node):
+    while self.visit(node["condition"]):
+        for stmt in node["body"]:
+            self.visit(stmt)
+   def visit_if_statement(self, node):
+    if self.visit(node["condition"]):
+        for stmt in node["then"]:
+            self.visit(stmt)
+        return
+
+    for elif_block in node["else_if"]:
+        if self.visit(elif_block["condition"]):
+            for stmt in elif_block["body"]:
+                self.visit(stmt)
+            return
+
+    if node["else"]:
+        for stmt in node["else"]:
+            self.visit(stmt)
 class Comp:
    """Parses a list of tokens into an Abstract Syntax Tree (AST)."""
    def __init__(self, tokens,textin):
