@@ -1,0 +1,12 @@
+.venv/
+.pytest_chane/
+Payjsr.egg-info/
+__pycache__/
+*.pyc
+.DS_Store
+.vscode/
+.idea/
+.env
+.env.*
+.ipynb_checkpoints/
+module/__pycache__/

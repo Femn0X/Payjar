@@ -46,11 +46,12 @@ class Parser:
        statements = []
        while self.current_token and self.current_token.type != 'RBRACE':
            if self.current_token.type == 'PRINT':statements.append(self.parse_print_statement())
+           elif self.current_token.type == 'FOR':statements.append(self.parse_for_statement())
            elif self.current_token.type in ('VAR','CONST', 'LET'):statements.append(self.parse_variable_declaration())
            elif self.current_token.type == 'DEF':statements.append(self.parse_function_definition())
            elif self.current_token.type == 'PUBLIC':statements.append(self.parse_public_class_definition())
            elif self.current_token.type == 'CLASS':statements.append(self.parse_class_definition())
-           elif self.current_token.type == 'IDENTIFIER':
+           elif self.current_token.type in ('IDENTIFIER','MAIN'):
                peek_token_idx = self.token_index + 1
                if peek_token_idx < len(self.tokens) and self.tokens[peek_token_idx].type == 'EQUAL':statements.append(self.parse_assignment_statement())
                elif peek_token_idx < len(self.tokens) and self.tokens[peek_token_idx].type == 'DOT':
@@ -110,7 +111,12 @@ class Parser:
        """Parses a function or method definition."""
        self.eat('DEF')
        function_name = self.current_token.value
-       self.eat('IDENTIFIER')
+       if self.current_token.type == 'IDENTIFIER':
+           self.eat('IDENTIFIER')
+       elif self.current_token.type == 'MAIN':
+           self.eat('MAIN')
+       else:
+           raise Exception(f"Syntax Error: Expected function name, but got {self.current_token.type if self.current_token else 'EOF'}")
        self.eat('LPAREN')
        parameters = []
        if self.current_token and self.current_token.type != 'RPAREN':
@@ -126,8 +132,9 @@ class Parser:
        body = []
        while self.current_token and self.current_token.type != 'RBRACE':
            if self.current_token.type == 'PRINT':body.append(self.parse_print_statement())
+           elif self.current_token.type == 'FOR':body.append(self.parse_for_statement())
            elif self.current_token.type in ('CONST', 'LET'):body.append(self.parse_variable_declaration())
-           elif self.current_token.type == 'IDENTIFIER':
+           elif self.current_token.type in ('IDENTIFIER','MAIN'):
                peek_token_idx = self.token_index + 1
                if peek_token_idx < len(self.tokens) and self.tokens[peek_token_idx].type == 'EQUAL':body.append(self.parse_assignment_statement())
                elif peek_token_idx < len(self.tokens) and self.tokens[peek_token_idx].type == 'DOT':
@@ -146,6 +153,7 @@ class Parser:
                    self.eat('SEMICOLON')
                else:raise Exception(f"Syntax Error: Unexpected token in function body (expected assignment or call): {self.current_token.type if self.current_token else 'EOF'}")
            elif self.current_token.type == 'RETURN':body.append(self.parse_return_statement())
+           elif self.current_token.type == 'FOR':body.append(self.parse_for_statement())
            else:raise Exception(f"Syntax Error: Unexpected token in function body: {self.current_token.type if self.current_token else 'EOF'}")
        self.eat('RBRACE')
        return {"type": "function_definition", "name": function_name, "parameters": parameters, "body": body, "is_method": is_method}
@@ -163,6 +171,185 @@ class Parser:
        self.eat('RPAREN')
        self.eat('SEMICOLON')
        return {"type": "print_statement", "expression": expression}
+   def parse_for_statement(self):
+       """Parses for loops for the Comp parser. Mirrors Parser.parse_for_statement."""
+       self.eat('FOR')
+       self.eat('LPAREN')
+       if self.current_token and self.current_token.type in ('LET', 'CONST', 'VAR'):
+           # Look ahead for an 'IN' token within the next few tokens to detect 'for ... in' syntax
+           found_in = False
+           for look_ahead in (1,2,3):
+               if (self.token_index + look_ahead) < len(self.tokens) and self.tokens[self.token_index + look_ahead].type == 'IN':
+                   found_in = True
+                   break
+           if found_in:
+               decl_type = self.current_token.type
+               self.advance()
+               var_name = self.current_token.value
+               self.eat('IDENTIFIER')
+               self.eat('IN')
+               iterable = self.parse_expression()
+               self.eat('RPAREN')
+               self.eat('LBRACE')
+               body = []
+               while self.current_token and self.current_token.type != 'RBRACE':
+                   if self.current_token.type == 'PRINT':body.append(self.parse_print_statement())
+                   elif self.current_token.type in ('CONST', 'LET'):body.append(self.parse_variable_declaration())
+                   elif self.current_token.type in ('IDENTIFIER','MAIN'):
+                       peek_token_idx = self.token_index + 1
+                       if peek_token_idx < len(self.tokens) and self.tokens[peek_token_idx].type == 'EQUAL':body.append(self.parse_assignment_statement())
+                       elif peek_token_idx < len(self.tokens) and self.tokens[peek_token_idx].type == 'DOT':
+                           obj_name = self.current_token.value
+                           self.eat('IDENTIFIER')
+                           obj_expr = {"type": "variable_access", "name": obj_name}
+                           expr = self.parse_member_access(obj_expr)
+                           body.append(expr)
+                           if expr["type"] == "member_access" and expr["is_call"]:self.eat('SEMICOLON')
+                       elif peek_token_idx < len(self.tokens) and self.tokens[peek_token_idx].type == 'LPAREN':
+                           expr = self.parse_function_call_expression()
+                           body.append(expr)
+                           self.eat('SEMICOLON')
+                       else:raise Exception(f"Syntax Error: Unexpected token in for-body: {self.current_token.type if self.current_token else 'EOF'}")
+                   elif self.current_token.type == 'RETURN':body.append(self.parse_return_statement())
+                   elif self.current_token.type == 'FOR':body.append(self.parse_for_statement())
+                   else:raise Exception(f"Syntax Error: Unexpected token in for-body: {self.current_token.type if self.current_token else 'EOF'}")
+               self.eat('RBRACE')
+               return {"type": "for_statement", "is_in": True, "decl_type": decl_type, "var_name": var_name, "iterable": iterable, "body": body}
+       init = None
+       if self.current_token and self.current_token.type in ('LET', 'CONST', 'VAR'):
+           decl_type = self.current_token.type
+           self.advance()
+           var_name = self.current_token.value
+           self.eat('IDENTIFIER')
+           self.eat('EQUAL')
+           init_value = self.parse_expression()
+           init = {"type": "variable_declaration", "kind": decl_type, "name": var_name, "value": init_value}
+       elif self.current_token and self.current_token.type != 'SEMICOLON':
+           init = self.parse_expression()
+       self.eat('SEMICOLON')
+       condition = None
+       if self.current_token and self.current_token.type != 'RPAREN':
+           condition = self.parse_expression()
+       self.eat('RPAREN')
+       self.eat('LBRACE')
+       body = []
+       while self.current_token and self.current_token.type != 'RBRACE':
+           if self.current_token.type == 'PRINT':body.append(self.parse_print_statement())
+           elif self.current_token.type == 'FOR':body.append(self.parse_for_statement())
+           elif self.current_token.type in ('CONST', 'LET'):body.append(self.parse_variable_declaration())
+           elif self.current_token.type in ('IDENTIFIER','MAIN'):
+               peek_token_idx = self.token_index + 1
+               if peek_token_idx < len(self.tokens) and self.tokens[peek_token_idx].type == 'EQUAL':body.append(self.parse_assignment_statement())
+               elif peek_token_idx < len(self.tokens) and self.tokens[peek_token_idx].type == 'DOT':
+                   obj_name = self.current_token.value
+                   self.eat('IDENTIFIER')
+                   obj_expr = {"type": "variable_access", "name": obj_name}
+                   expr = self.parse_member_access(obj_expr)
+                   body.append(expr)
+                   if expr["type"] == "member_access" and expr["is_call"]:self.eat('SEMICOLON')
+               elif peek_token_idx < len(self.tokens) and self.tokens[peek_token_idx].type == 'LPAREN':
+                   expr = self.parse_function_call_expression()
+                   body.append(expr)
+                   self.eat('SEMICOLON')
+               else:raise Exception(f"Syntax Error: Unexpected token in for-body: {self.current_token.type if self.current_token else 'EOF'}")
+           elif self.current_token.type == 'RETURN':body.append(self.parse_return_statement())
+           elif self.current_token.type == 'FOR':body.append(self.parse_for_statement())
+           else:raise Exception(f"Syntax Error: Unexpected token in for-body: {self.current_token.type if self.current_token else 'EOF'}")
+       self.eat('RBRACE')
+       return {"type": "for_statement", "is_in": False, "init": init, "condition": condition, "body": body}
+   def parse_for_statement(self):
+       """Parses for loops. Supports two forms:
+       1) for ( <init>; <condition> ) { ... }
+       2) for ( <var_decl> in <iterable> ) { ... }
+       """
+       self.eat('FOR')
+       self.eat('LPAREN')
+       # Detect for-in: e.g., for (let x in expr)
+       if self.current_token and self.current_token.type in ('LET', 'CONST', 'VAR'):
+           # Peek ahead to see if 'IN' occurs after identifier
+           # Look ahead for an 'IN' token within the next few tokens to detect 'for ... in' syntax
+           found_in = False
+           for look_ahead in (1,2,3):
+               if (self.token_index + look_ahead) < len(self.tokens) and self.tokens[self.token_index + look_ahead].type == 'IN':
+                   found_in = True
+                   break
+           if found_in:
+               decl_type = self.current_token.type
+               self.advance()
+               var_name = self.current_token.value
+               self.eat('IDENTIFIER')
+               self.eat('IN')
+               iterable = self.parse_expression()
+               self.eat('RPAREN')
+               self.eat('LBRACE')
+               body = []
+               while self.current_token and self.current_token.type != 'RBRACE':
+                   if self.current_token.type == 'PRINT':body.append(self.parse_print_statement())
+                   elif self.current_token.type in ('CONST', 'LET'):body.append(self.parse_variable_declaration())
+                   elif self.current_token.type in ('IDENTIFIER','MAIN'):
+                       peek_token_idx = self.token_index + 1
+                       if peek_token_idx < len(self.tokens) and self.tokens[peek_token_idx].type == 'EQUAL':body.append(self.parse_assignment_statement())
+                       elif peek_token_idx < len(self.tokens) and self.tokens[peek_token_idx].type == 'DOT':
+                           obj_name = self.current_token.value
+                           self.eat('IDENTIFIER')
+                           obj_expr = {"type": "variable_access", "name": obj_name}
+                           expr = self.parse_member_access(obj_expr)
+                           body.append(expr)
+                           if expr["type"] == "member_access" and expr["is_call"]:self.eat('SEMICOLON')
+                       elif peek_token_idx < len(self.tokens) and self.tokens[peek_token_idx].type == 'LPAREN':
+                           expr = self.parse_function_call_expression()
+                           body.append(expr)
+                           self.eat('SEMICOLON')
+                       else:raise Exception(f"Syntax Error: Unexpected token in for-body: {self.current_token.type if self.current_token else 'EOF'}")
+                   elif self.current_token.type == 'RETURN':body.append(self.parse_return_statement())
+                   elif self.current_token.type == 'FOR':body.append(self.parse_for_statement())
+                   else:raise Exception(f"Syntax Error: Unexpected token in for-body: {self.current_token.type if self.current_token else 'EOF'}")
+               self.eat('RBRACE')
+               return {"type": "for_statement", "is_in": True, "decl_type": decl_type, "var_name": var_name, "iterable": iterable, "body": body}
+       # Otherwise parse classic for (init; condition)
+       init = None
+       if self.current_token and self.current_token.type in ('LET', 'CONST', 'VAR'):
+           # parse init without consuming trailing semicolon
+           decl_type = self.current_token.type
+           self.advance()
+           var_name = self.current_token.value
+           self.eat('IDENTIFIER')
+           self.eat('EQUAL')
+           init_value = self.parse_expression()
+           init = {"type": "variable_declaration", "kind": decl_type, "name": var_name, "value": init_value}
+       elif self.current_token and self.current_token.type != 'SEMICOLON':
+           init = self.parse_expression()
+       self.eat('SEMICOLON')
+       condition = None
+       if self.current_token and self.current_token.type != 'RPAREN':
+           condition = self.parse_expression()
+       self.eat('RPAREN')
+       self.eat('LBRACE')
+       body = []
+       while self.current_token and self.current_token.type != 'RBRACE':
+           if self.current_token.type == 'PRINT':body.append(self.parse_print_statement())
+           elif self.current_token.type == 'FOR':body.append(self.parse_for_statement())
+           elif self.current_token.type in ('CONST', 'LET'):body.append(self.parse_variable_declaration())
+           elif self.current_token.type in ('IDENTIFIER','MAIN'):
+               peek_token_idx = self.token_index + 1
+               if peek_token_idx < len(self.tokens) and self.tokens[peek_token_idx].type == 'EQUAL':body.append(self.parse_assignment_statement())
+               elif peek_token_idx < len(self.tokens) and self.tokens[peek_token_idx].type == 'DOT':
+                   obj_name = self.current_token.value
+                   self.eat('IDENTIFIER')
+                   obj_expr = {"type": "variable_access", "name": obj_name}
+                   expr = self.parse_member_access(obj_expr)
+                   body.append(expr)
+                   if expr["type"] == "member_access" and expr["is_call"]:self.eat('SEMICOLON')
+               elif peek_token_idx < len(self.tokens) and self.tokens[peek_token_idx].type == 'LPAREN':
+                   expr = self.parse_function_call_expression()
+                   body.append(expr)
+                   self.eat('SEMICOLON')
+               else:raise Exception(f"Syntax Error: Unexpected token in for-body: {self.current_token.type if self.current_token else 'EOF'}")
+           elif self.current_token.type == 'RETURN':body.append(self.parse_return_statement())
+           elif self.current_token.type == 'FOR':body.append(self.parse_for_statement())
+           else:raise Exception(f"Syntax Error: Unexpected token in for-body: {self.current_token.type if self.current_token else 'EOF'}")
+       self.eat('RBRACE')
+       return {"type": "for_statement", "is_in": False, "init": init, "condition": condition, "body": body}
    def parse_input_statement(self):
        self.eat('READLN')
        self.eat('LPAREN')
@@ -231,7 +418,7 @@ class Parser:
                    if part:template_parts.append({"type": "literal", "value": part, "data_type": "string"})
                else:template_parts.append({"type": "variable_access", "name": part})
            return {"type": "template_string", "parts": template_parts}
-       elif self.current_token.type == 'IDENTIFIER':
+       elif self.current_token.type in ('IDENTIFIER','MAIN'):
            # This could be a variable access, function call, or start of a member access
            name = self.current_token.value
            self.advance() # Consume the identifier first
@@ -266,7 +453,12 @@ class Parser:
        Note: This is called when the identifier *and* LPAREN are already peeked.
        """
        function_name = self.current_token.value
-       self.eat('IDENTIFIER') # Consume the function name identifier
+       if self.current_token.type == 'IDENTIFIER':
+           self.eat('IDENTIFIER')
+       elif self.current_token.type == 'MAIN':
+           self.eat('MAIN')
+       else:
+           raise Exception(f"Syntax Error: Expected function name, but got {self.current_token.type if self.current_token else 'EOF'}")
        self.eat('LPAREN')
        arguments = []
        if self.current_token and self.current_token.type != 'RPAREN':
@@ -398,6 +590,8 @@ class Lexer:
                elif identifier == 'new': return Token('NEW', 'new')
                elif identifier == 'readln': return Token('READLN', 'readln')
                elif identifier == 'return': return Token('RETURN', 'return')
+               elif identifier == 'for': return Token('FOR', 'for')
+               elif identifier == 'in': return Token('IN', 'in')
                else: return Token('IDENTIFIER', identifier)
            # Arithmetic Operators
            if self.current_char == '+': self.advance(); return Token('PLUS', '+')
@@ -542,6 +736,7 @@ class Interpreter:
        elif node_type == "binary_op":return self.visit_binary_op(node)
        elif node_type == "unary_op":return self.visit_unary_op(node)
        elif node_type == "field_declaration":pass # Field declarations are handled during object creation
+       elif node_type == "for_statement":return self.visit_for_statement(node, current_instance)
        else:raise Exception(f"Runtime Error: Unknown AST node type: {node_type}")
    def visit_print_statement(self, node):
        """Executes a print statement."""
@@ -667,6 +862,59 @@ class Interpreter:
        if member_name not in obj.fields:raise Exception(f"Runtime Error: Field '{member_name}' not found on object of type '{obj.class_name}' for assignment.")
        if obj.fields[member_name]["kind"] == 'CONST':raise Exception(f"Runtime Error: Cannot assign to constant field '{member_name}' of object '{obj.class_name}'.")
        obj.fields[member_name]["value"] = new_value
+   def visit_for_statement(self, node, current_instance=None):
+       """Executes a for loop AST node. Supports both for-in and for(init;condition)."""
+       if node.get('is_in'):
+           # Evaluate iterable: support range(...) specially
+           iterable_node = node['iterable']
+           if isinstance(iterable_node, dict) and iterable_node.get('type') == 'function_call' and iterable_node.get('name') == 'range':
+               args = [self.visit(arg) for arg in iterable_node.get('arguments', [])]
+               if len(args) == 1: rng = range(args[0])
+               elif len(args) == 2: rng = range(args[0], args[1])
+               elif len(args) == 3: rng = range(args[0], args[1], args[2])
+               else: raise Exception("Runtime Error: range() expects 1-3 arguments")
+               iterable = list(rng)
+           else:
+               iterable = self.visit(iterable_node)
+           # Iterate
+           for item in iterable:
+               self.push_scope()
+               # declare loop variable
+               decl_kind = node.get('decl_type', 'LET')
+               self.set_variable(node['var_name'], item, kind=decl_kind)
+               try:
+                   for stmt in node.get('body', []):
+                       self.visit(stmt, current_instance)
+               except FunctionReturn as e:
+                   self.pop_scope()
+                   raise
+               finally:
+                   self.pop_scope()
+           return None
+       # Classic for(init; condition)
+       self.push_scope()
+       try:
+           init = node.get('init')
+           if init:
+               if init.get('type') == 'variable_declaration':
+                   self.set_variable(init['name'], self.visit(init['value']), kind=init['kind'])
+               else:
+                   # expression init
+                   self.visit(init)
+           while True:
+               cond = node.get('condition')
+               if cond is not None:
+                   cond_val = self.visit(cond)
+                   if not cond_val:break
+               # No condition means infinite loop
+               try:
+                   for stmt in node.get('body', []):
+                       self.visit(stmt, current_instance)
+               except FunctionReturn as e:
+                   raise
+           return None
+       finally:
+           self.pop_scope()
    def visit_binary_op(self, node):
        """Executes binary operations (e.g., +, -, *, /, %, ==, !=, <, >, <=, >=)."""
        left_val = self.visit(node["left"])
@@ -698,7 +946,7 @@ class Interpreter:
        if operator == '+':return +operand_val
        elif operator == '-':return -operand_val
        else:raise Exception(f"Runtime Error: Unsupported unary operator: {operator}")
-class Comp:
+class Comp(Parser):
    """Parses a list of tokens into an Abstract Syntax Tree (AST)."""
    def __init__(self, tokens,textin):
        self.tokens = tokens
@@ -706,324 +954,22 @@ class Comp:
        self.token_index = -1
        self.text=textin
        self.advance()
-   def advance(self):
-       """Moves to the next token in the stream."""
-       self.token_index += 1
-       if self.token_index < len(self.tokens):self.current_token = self.tokens[self.token_index]
-       else:self.current_token = None # End of tokens (EOF)
-   def eat(self, token_type):
-       """
-       Consumes the current token if its type matches the expected type,
-       then advances to the next token. Raises an error if types don't match.
-       """
-       if self.current_token and self.current_token.type == token_type:self.advance()
-       else:raise Exception(f"Syntax Error: Expected {token_type}, but got {self.current_token.type if self.current_token else 'EOF'}. Current token index: {self.token_index}")
-   def parse_main(self):
-       """Parses the main program structure: public class Main(@self){...}"""
-       self.eat('PUBLIC')
-       self.eat('CLASS')
-       class_name = self.current_token.value
-       self.eat('MAIN') # Expecting 'main' as an IDENTIFIER
-       self.eat('LPAREN')
-       self.eat('AT')
-       self.eat('SELF')
-       self.eat('RPAREN')
-       self.eat('LBRACE')
-       main_body = self.parse_main_body()
-       self.eat('RBRACE')
-       return {"type": "main_definition", "name": class_name, "body": main_body}
-   def parse_main_body(self):
-       """Parses the statements within the main class body."""
-       statements = []
-       while self.current_token and self.current_token.type != 'RBRACE':
-           if self.current_token.type == 'PRINT':statements.append(self.parse_print_statement())
-           elif self.current_token.type in ('VAR','CONST', 'LET'):statements.append(self.parse_variable_declaration())
-           elif self.current_token.type == 'DEF':statements.append(self.parse_function_definition())
-           elif self.current_token.type == 'PUBLIC':statements.append(self.parse_public_class_definition())
-           elif self.current_token.type == 'CLASS':statements.append(self.parse_class_definition())
-           elif self.current_token.type == 'IDENTIFIER':
-               peek_token_idx = self.token_index + 1
-               if peek_token_idx < len(self.tokens) and self.tokens[peek_token_idx].type == 'EQUAL':statements.append(self.parse_assignment_statement())
-               elif peek_token_idx < len(self.tokens) and self.tokens[peek_token_idx].type == 'DOT':
-                   # Member access or assignment (e.g., obj.field = 10; or obj.method();)
-                   obj_name = self.current_token.value
-                   self.eat('IDENTIFIER') # Consume the initial object identifier
-                   obj_expr = {"type": "variable_access", "name": obj_name}
-                   expr = self.parse_member_access(obj_expr) # This might consume the semicolon if it's an assignment
-                   statements.append(expr)
-                   # If it's a method call (not an assignment), it needs a semicolon
-                   if expr["type"] == "member_access" and expr["is_call"]:self.eat('SEMICOLON')
-               elif peek_token_idx < len(self.tokens) and self.tokens[peek_token_idx].type == 'LPAREN':
-                   # Global function call as a statement (e.g., myFunction(arg);)
-                   expr = self.parse_function_call_expression()
-                   statements.append(expr)
-                   self.eat('SEMICOLON')
-               else:raise Exception(f"Syntax Error: Unexpected token in main body (expected assignment or call): {self.current_token.type if self.current_token else 'EOF'}")
-           else:raise Exception(f"Syntax Error: Unexpected token in main body: {self.current_token.type if self.current_token else 'EOF'}")
-       return statements
-   def parse_public_class_definition(self):
-    self.eat('PUBLIC')
-    info=self.parse_class_definition()
-    return info
-   def parse_class_definition(self):
-       """Parses a class definition."""
-       self.eat('CLASS')
-       class_name = self.current_token.value
-       self.eat('IDENTIFIER')
-       self.eat('LPAREN')
-       self.eat('AT')
-       self.eat('INNERSELF')
-       self.eat('RPAREN')
-       self.eat('LBRACE')
-       members = []
-       methods = []
-       constructor = None
-       while self.current_token and self.current_token.type != 'RBRACE':
-           if self.current_token.type in ('CONST', 'LET'):members.append(self.parse_class_field_declaration())
-           elif self.current_token.type == 'DEF':
-               method_def = self.parse_function_definition(is_method=True)
-               if method_def["name"] == "init":constructor = method_def
-               else:methods.append(method_def)
-           else:raise Exception(f"Syntax Error: Unexpected token in class body: {self.current_token.type if self.current_token else 'EOF'}")
-       self.eat('RBRACE')
-       return {"type": "class_definition", "name": class_name, "fields": members, "methods": methods, "constructor": constructor}
-   def parse_class_field_declaration(self):
-       """Parses a field declaration within a class (e.g., let myField = 10;)."""
-       declaration_type = self.current_token.type
-       self.advance() # Consume CONST or LET
-       field_name = self.current_token.value
-       self.eat('IDENTIFIER')
-       initial_value = None
-       if self.current_token and self.current_token.type == 'EQUAL':self.eat('EQUAL');initial_value = self.parse_expression()
-       self.eat('SEMICOLON')
-       return {"type": "field_declaration", "kind": declaration_type, "name": field_name, "value": initial_value}
-   def parse_function_definition(self, is_method=False):
-       """Parses a function or method definition."""
-       self.eat('DEF')
-       function_name = self.current_token.value
-       self.eat('IDENTIFIER')
-       self.eat('LPAREN')
-       parameters = []
-       if self.current_token and self.current_token.type != 'RPAREN':
-           if is_method and self.current_token.type == 'SELF':parameters.append(self.current_token.value);self.eat('SELF')
-           elif not is_method and self.current_token.type == 'SELF':raise Exception("Syntax Error: The 'self' parameter is only allowed in class method definitions.")
-           else:parameters.append(self.current_token.value);self.eat('IDENTIFIER')
-           while self.current_token and self.current_token.type == 'COMMA':
-               self.eat('COMMA')
-               parameters.append(self.current_token.value)
-               self.eat('IDENTIFIER')
-       self.eat('RPAREN')
-       self.eat('LBRACE')
-       body = []
-       while self.current_token and self.current_token.type != 'RBRACE':
-           if self.current_token.type == 'PRINT':body.append(self.parse_print_statement())
-           elif self.current_token.type in ('CONST', 'LET'):body.append(self.parse_variable_declaration())
-           elif self.current_token.type == 'IDENTIFIER':
-               peek_token_idx = self.token_index + 1
-               if peek_token_idx < len(self.tokens) and self.tokens[peek_token_idx].type == 'EQUAL':body.append(self.parse_assignment_statement())
-               elif peek_token_idx < len(self.tokens) and self.tokens[peek_token_idx].type == 'DOT':
-                   # Member access or assignment (e.g., obj.field = 10; or obj.method();)
-                   obj_name = self.current_token.value
-                   self.eat('IDENTIFIER') # Consume the initial object identifier
-                   obj_expr = {"type": "variable_access", "name": obj_name}
-                   expr = self.parse_member_access(obj_expr) # This might consume the semicolon if it's an assignment
-                   body.append(expr)
-                   # If it's a method call (not an assignment), it needs a semicolon
-                   if expr["type"] == "member_access" and expr["is_call"]:self.eat('SEMICOLON')
-               elif peek_token_idx < len(self.tokens) and self.tokens[peek_token_idx].type == 'LPAREN':
-                   # Global function call as a statement (e.g., myFunction(arg);)
-                   expr = self.parse_function_call_expression()
-                   body.append(expr)
-                   self.eat('SEMICOLON')
-               else:raise Exception(f"Syntax Error: Unexpected token in function body (expected assignment or call): {self.current_token.type if self.current_token else 'EOF'}")
-           elif self.current_token.type == 'RETURN':body.append(self.parse_return_statement())
-           else:raise Exception(f"Syntax Error: Unexpected token in function body: {self.current_token.type if self.current_token else 'EOF'}")
-       self.eat('RBRACE')
-       return {"type": "function_definition", "name": function_name, "parameters": parameters, "body": body, "is_method": is_method}
-   def parse_return_statement(self):
-       """Parses a return statement."""
-       self.eat('RETURN')
-       expression = self.parse_expression()
-       self.eat('SEMICOLON')
-       return {"type": "return_statement", "expression": expression}
    def parse_print_statement(self):
-       """Parses a print statement."""
-       self.eat('PRINT')
-       self.eat('LPAREN')
-       expression = self.parse_expression()
-       self.eat('RPAREN')
-       self.eat('SEMICOLON')
-       return {"type": "print_statement", "expression": expression}
+        "print that returns a string instead of printing"
+        self.eat('PRINT')
+        self.eat('LPAREN')
+        expr = self.parse_expression()
+        self.eat('RPAREN')
+        self.eat('SEMICOLON')
+        return {"type": "print_statement", "expression": expr}
    def parse_input_statement(self):
+       """Parses an input statement (readln)."""
        self.eat('READLN')
        self.eat('LPAREN')
-       prompt=self.parse_expression()["value"]
-       val=self.text
+       prompt_expr = super().parse_expression()
        self.eat('RPAREN')
-       return {"type":"literal","data_type":'string',"value":val,"prompt":prompt}
-   # --- Expression Parsing with Operator Precedence ---
-   # Implements operator precedence using a recursive descent parser.
-   # Grammar for expressions (simplified):
-   # expression     : comparison ( ( '==' | '!=' | '<' | '>' | '<=' | '>=' ) comparison )*
-   # comparison     : term ( ( '+' | '-' ) term )*
-   # term           : factor ( ( '*' | '/' | '%' ) factor )*
-   # factor         : ( '+' | '-' )* primary
-   # primary        : NUMBER | STRING_LITERAL | IDENTIFIER | BACKTICK_STRING | NEW_EXPRESSION | LPAREN expression RPAREN | function_call | member_access
-   def parse_expression(self):
-       """Parses comparison operators (==, !=, <, >, <=, >=)."""
-       left = self._parse_term()
-       while self.current_token and self.current_token.type in ('EQUAL_EQUAL', 'NOT_EQUAL', 'LESS_THAN', 'GREATER_THAN', 'LESS_EQUAL', 'GREATER_EQUAL'):
-           operator = self.current_token.value
-           self.advance()
-           right = self._parse_term()
-           left = {"type": "binary_op", "operator": operator, "left": left, "right": right}
-       return left
-   def _parse_term(self):
-       """Parses addition and subtraction operators (+, -)."""
-       left = self._parse_factor()
-       while self.current_token and self.current_token.type in ('PLUS', 'MINUS'):
-           operator = self.current_token.value
-           self.advance()
-           right = self._parse_factor()
-           left = {"type": "binary_op", "operator": operator, "left": left, "right": right}
-       return left
-   def _parse_factor(self):
-       """Parses multiplication, division, and modulo operators (*, /, %)."""
-       # Handle unary plus/minus (e.g., -5, +variable)
-       if self.current_token and self.current_token.type in ('PLUS', 'MINUS'):
-           operator = self.current_token.value
-           self.advance()
-           operand = self._parse_primary_expression()
-           return {"type": "unary_op", "operator": operator, "operand": operand}
-       left = self._parse_primary_expression()
-       while self.current_token and self.current_token.type in ('MULTIPLY', 'DIVIDE', 'MODULO'):
-           operator = self.current_token.value
-           self.advance()
-           right = self._parse_primary_expression()
-           left = {"type": "binary_op", "operator": operator, "left": left, "right": right}
-       return left
-   def _parse_primary_expression(self):
-       """Parses the most basic expressions: literals, identifiers, new expressions, parenthesized expressions."""
-       if self.current_token.type == 'STRING_LITERAL':
-           value = self.current_token.value
-           self.eat('STRING_LITERAL')
-           return {"type": "literal", "value": value, "data_type": "string"}
-       elif self.current_token.type == 'NUMBER':
-           value = self.current_token.value
-           self.eat('NUMBER')
-           return {"type": "literal", "value": int(value), "data_type": "number"}
-       elif self.current_token.type == 'BACKTICK_STRING':
-           template_parts = []
-           string_content = self.current_token.value
-           self.eat('BACKTICK_STRING')
-           parts = re.split(r'\$\{(\w+)\}', string_content) # Splits by ${variableName}
-           for i, part in enumerate(parts):
-               if i % 2 == 0: # Even indices are literal strings
-                   if part:template_parts.append({"type": "literal", "value": part, "data_type": "string"})
-               else:template_parts.append({"type": "variable_access", "name": part})
-           return {"type": "template_string", "parts": template_parts}
-       elif self.current_token.type == 'IDENTIFIER':
-           # This could be a variable access, function call, or start of a member access
-           name = self.current_token.value
-           self.advance() # Consume the identifier first
-           next_token = self.current_token # Now current_token is what was next after the identifier
-           if next_token and next_token.type == 'LPAREN':
-               # It's a function call (e.g., myFunction(arg))
-               # Re-create the function call node with the already consumed identifier
-               func_call_node = {"type": "function_call", "name": name, "arguments": []}
-               self.eat('LPAREN')
-               if self.current_token and self.current_token.type != 'RPAREN':
-                   func_call_node["arguments"].append(self.parse_expression())
-                   while self.current_token and self.current_token.type == 'COMMA':self.eat('COMMA');func_call_node["arguments"].append(self.parse_expression())
-               self.eat('RPAREN')
-               return func_call_node
-           elif next_token and next_token.type == 'DOT':
-               # It's a member access (e.g., obj.field or obj.method())
-               obj_expr = {"type": "variable_access", "name": name}
-               return self.parse_member_access(obj_expr)
-           else:return {"type": "variable_access", "name": name}
-       elif self.current_token.type=='READLN':
-           return self.parse_input_statement()
-       elif self.current_token.type == 'NEW':return self.parse_new_expression()
-       elif self.current_token.type == 'LPAREN': # For parenthesized expressions (e.g., (2 + 3) * 4)
-           self.eat('LPAREN')
-           expr = self.parse_expression() # Recursively parse the inner expression
-           self.eat('RPAREN')
-           return expr
-       else:raise Exception(f"Syntax Error: Unexpected token in primary expression: {self.current_token.type if self.current_token else 'EOF'}")
-   def parse_function_call_expression(self):
-       """
-       Parses a function call expression.
-       Note: This is called when the identifier *and* LPAREN are already peeked.
-       """
-       function_name = self.current_token.value
-       self.eat('IDENTIFIER') # Consume the function name identifier
-       self.eat('LPAREN')
-       arguments = []
-       if self.current_token and self.current_token.type != 'RPAREN':
-           arguments.append(self.parse_expression())
-           while self.current_token and self.current_token.type == 'COMMA':self.eat('COMMA');arguments.append(self.parse_expression())
-       self.eat('RPAREN')
-       return {"type": "function_call", "name": function_name, "arguments": arguments}
-   def parse_member_access(self, obj_expr):
-       """
-       Parses member access (obj.field) or method calls (obj.method())
-       or member assignments (obj.field = value).
-       """
-       self.eat('DOT')
-       member_name = self.current_token.value
-       self.eat('IDENTIFIER')
-       is_call = False
-       member_args = []
-       # Check if it's a method call (e.g., obj.method())
-       if self.current_token and self.current_token.type == 'LPAREN':
-           is_call = True
-           self.eat('LPAREN')
-           if self.current_token and self.current_token.type != 'RPAREN':
-               member_args.append(self.parse_expression())
-               while self.current_token and self.current_token.type == 'COMMA':self.eat('COMMA');member_args.append(self.parse_expression())
-           self.eat('RPAREN')
-       # Check for assignment to a member (e.g., obj.property = value;)
-       if self.current_token and self.current_token.type == 'EQUAL':
-           self.eat('EQUAL')
-           value_expr = self.parse_expression()
-           self.eat('SEMICOLON') # Member assignment consumes its own semicolon
-           return {"type": "member_assignment", "object": obj_expr, "member": member_name, "value": value_expr}
-       # If it's not an assignment or a call, it's just an access to a property
-       return {"type": "member_access", "object": obj_expr, "member": member_name, "is_call": is_call, "arguments": member_args}
-   def parse_variable_declaration(self):
-       """Parses a variable declaration (e.g., let x = 10; or const PI = 3.14;)."""
-       declaration_type = self.current_token.type
-       self.advance() # Consume CONST,LET or var
-       variable_name = self.current_token.value
-       self.eat('IDENTIFIER')
-       self.eat('EQUAL')
-       value_expression = self.parse_expression()
        self.eat('SEMICOLON')
-       return {"type": "variable_declaration", "kind": declaration_type, "name": variable_name, "value": value_expression}
-   def parse_assignment_statement(self):
-       """Parses a variable assignment statement (e.g., x = 20;)."""
-       variable_name = self.current_token.value
-       self.eat('IDENTIFIER')
-       self.eat('EQUAL')
-       value_expression = self.parse_expression()
-       self.eat('SEMICOLON')
-       return {"type": "assignment_statement", "name": variable_name, "value": value_expression}
-   def parse_new_expression(self):
-       """Parses an object creation expression (e.g., new MyClass(arg1, arg2))."""
-       self.eat('NEW')
-       class_name = self.current_token.value
-       self.eat('IDENTIFIER')
-       self.eat('LPAREN')
-       arguments = []
-       if self.current_token and self.current_token.type != 'RPAREN':
-           arguments.append(self.parse_expression())
-           while self.current_token and self.current_token.type == 'COMMA':self.eat('COMMA');arguments.append(self.parse_expression())
-       self.eat('RPAREN')
-       return {"type": "object_creation", "class_name": class_name, "arguments": arguments}
-   def parse(self):
-       """Starts the parsing process for the entire program."""
-       return self.parse_main()     
+       return {"type": "input_statement", "prompt": prompt_expr}
 class PJRT:
    """Main Tkinter application for the Esolang Comp."""
    def __init__(self, code,debug=False):
