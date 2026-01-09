@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 # Payjar IDE - Professional Editor
 
 A feature-rich Python IDE for the **Payjar programming language** with modern UI, syntax highlighting, and built-in execution.
