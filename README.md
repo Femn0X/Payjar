@@ -176,7 +176,3 @@ Open source - Payjar IDE
 ---
 
 **Happy coding with Payjar!** 🚀
-=======
-# Payjar 
-wip
->>>>>>> 1874ff2b74a13adf17314473452a305958ba4d44
