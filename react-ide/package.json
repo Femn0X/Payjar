@@ -1,0 +1,24 @@
+{
+  "name": "pro-ide-react-vite-tauri",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A pro IDE scaffold using React, Vite and Tauri (frontend + Rust backend)",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build"
+  },
+  "dependencies": {
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "@tauri-apps/api": "^2.0.0",
+    "@monaco-editor/react": "^4.4.6"
+  },
+  "devDependencies": {
+    "vite": "^5.0.0",
+    "@vitejs/plugin-react-swc": "^3.0.0"
+    
+  }
+}

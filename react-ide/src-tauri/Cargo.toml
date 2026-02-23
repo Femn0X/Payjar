@@ -1,0 +1,13 @@
+[package]
+name = "pro_ide_tauri"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# tauri dependency will be resolved by the Tauri CLI when building
+tauri = { version = "^2.0", features = ["api-all"] }
+
+[build-dependencies]
+
+[profile.release]
+opt-level = 3

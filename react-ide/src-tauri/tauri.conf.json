@@ -1,0 +1,18 @@
+{
+  "package": {
+    "productName": "pro-ide",
+    "version": "0.1.0"
+  },
+  "tauri": {
+    "bundle": {
+      "identifier": "com.example.pro-ide"
+    },
+    "windows": [
+      {
+        "title": "Pro IDE",
+        "width": 1200,
+        "height": 800
+      }
+    ]
+  }
+}
