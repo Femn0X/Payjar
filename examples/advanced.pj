@@ -8,7 +8,7 @@ println(`Y=${y}`);
 println(`Sum=${sum}`);
 
 // Conditional example
-if sum > 25 {
+if (sum > 25) {
     println("Sum is greater than 25!");
 } else {
     println("Sum is 25 or less");
@@ -16,7 +16,7 @@ if sum > 25 {
 
 // Loop example
 var i = 0;
-while i < 5 {
+while (i < 5) {
     println(`Iteration:${i}`);
     i = i + 1;
 }

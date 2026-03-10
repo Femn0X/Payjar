@@ -1,0 +1,74 @@
+# PayJar
+
+PayJar is a simple, lightweight interpreter for the **PJ** esoteric programming language, written in C.  The language is designed to be familiar to Java/JavaScript developers with a minimal syntax, modern features and a tiny runtime.
+
+The repository also contains a React‑based IDE (`react-ide/`) that can be used to edit and run PayJar programs in the browser or as a Tauri desktop application.
+
+---
+## Language Features
+
+* Class‑based, public/private methods, `this`/`self` support
+* `main` entry point with `public class main(@self){ ... }`
+* `let`/`const`/`var` declarations with block scoping
+* Arithmetic operators (`+ - * / %`) and full comparison set (`== != < <= > >=`)
+* `if` / `else` / `else if`, `while` loops, and C‑style `for` plus `for‑in`/`for‑range`
+* First‑class functions with `def` and parameter lists
+* Template strings (backtick literals) and normal string literals
+* `println`/`print` and `readln`/`readi`/`readf` for I/O
+* Lists, index access/assignment, and object creation with `new`
+* Packages with simple file loading via `pjrt`
+
+The language is intentionally small but expressive enough to build non‑trivial examples (see `examples/`).
+
+## Building the Interpreter
+
+You can compile the interpreter with the provided `makefile`:
+
+```sh
+# build interpreter binary (pjc) and runtime tool (pjrt)
+make all
+```
+
+The resulting executables (`pjc` and `pjrt`) appear in the project root.  A pre‑built binary is also included for convenience.
+
+## Running Programs
+
+Compile and run a program with the interpreter:
+
+```sh
+./pjc examples/hello.pj      # parse and execute immediately
+```
+
+The `pjrt` tool can be used to scan a directory and run packages (see below):
+
+```sh
+# run the package in the current directory with optional debug output
+./pjrt -d .
+```
+
+## Examples
+
+The `examples/` directory contains two sample programs:
+
+* `hello.pj` – a "Hello, world!" program demonstrating basic syntax.
+* `advanced.pj` – showcases classes, loops, I/O, and other language constructs.
+
+Feel free to modify or add your own `.pj` files and run them with `pjc`.
+
+## React IDE
+
+The subdirectory `react-ide/` contains a browser‑based editor built with React and Monaco.  To launch it:
+
+```sh
+cd react-ide
+npm install
+npm run dev
+```
+
+The IDE supports syntax highlighting and live execution via the PayJar interpreter.
+
+See `react-ide/README.md` for more details.
+
+## License
+
+PayJar is released under the MIT License.  See `LICENSE` for full terms.
