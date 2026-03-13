@@ -53,7 +53,9 @@ The `examples/` directory contains two sample programs:
 * `hello.pj` – a "Hello, world!" program demonstrating basic syntax.
 * `advanced.pj` – showcases classes, loops, I/O, and other language constructs.
 
-Feel free to modify or add your own `.pj` files and run them with `pjc`.
+The `examples/package-ex` directory has a package example.
+
+Feel free to modify or add your own `.pj` files and run them with `pjc` or `pjrt`.
 
 ## React IDE
 

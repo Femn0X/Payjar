@@ -1,0 +1,8 @@
+package main;
+func sum(a){
+    let re=0;
+    for(let e:auto in a){
+        re=re+e;
+    }
+    return re;
+}

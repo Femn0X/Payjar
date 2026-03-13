@@ -1,0 +1,4 @@
+public class main(@self){
+    let a=sum([0,1,2]);
+    println(a);
+}
