@@ -1,0 +1,27 @@
+[package]
+name = "Payjar"
+version = "0.1.0"
+edition = "2024"
+[profile.release]
+overflow-checks = true
+
+[dependencies]
+tempfile="3.5"
+eframe="0.28"
+egui="0.25"
+rfd="0.10"
+
+[package.metadata.deb]
+maintainer = "Your Name <you@example.com>"
+copyright = "2026, Your Name"
+license-file = ["LICENSE", "0"]
+extended-description = """\
+A longer description of your package.
+"""
+depends = "$auto"
+section = "utils"
+priority = "optional"
+assets = [
+    ["target/release/Payjar", "usr/bin/", "755"],
+    ["README", "usr/share/doc/README", "644"]
+]

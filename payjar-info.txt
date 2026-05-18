@@ -1,0 +1,51 @@
+PayJar v1.1.0 — Built-in Reference
+====================================
+
+BUILT-IN FUNCTIONS
+------------------
+
+I/O
+  print         - Print a value without a trailing newline
+  println       - Print a value followed by a newline
+  printerr      - Print a value to stderr
+  readln        - Read a line of text from stdin
+  readi         - Read an integer from stdin
+  readf         - Read a float from stdin
+
+TYPE CONVERSION
+  toStr         - Convert a value to a string
+  toInt         - Convert a value to an integer
+  toFloat       - Convert a value to a float
+  typeOf        - Return the type name of a value as a string
+
+STRING OPERATIONS
+  strLen        - Return the length of a string
+  charAt        - Return the character at a given index
+  strSlice      - Return a substring (start, end)
+  strContains   - Check if a string contains a substring (returns bool)
+  strSplit      - Split a string by a delimiter into a list
+  strTrim       - Remove leading and trailing whitespace
+  strStartsWith - Check if a string starts with a given prefix (returns bool)
+  strEndsWith   - Check if a string ends with a given suffix (returns bool)
+
+LIST / COLLECTION
+  len           - Return the length of a list or string
+  indexOf       - Return the index of an element in a list or string (-1 if not found)
+  range         - Generate a list of integers [start, end) or [0, end)
+
+MATH
+  pow           - Raise a number to a power: pow(base, exponent)
+
+FILE I/O
+  readFile      - Read the contents of a file as a string: readFile(path)
+  writeFile     - Write a string to a file (overwrites): writeFile(path, content)
+  appendFile    - Append a string to a file: appendFile(path, content)
+
+CONTROL
+  exit          - Exit the program with an optional code: exit(code)
+
+NOTES
+-----
+- All built-ins are available globally without any import.
+- File paths are relative to the working directory of the interpreter.
+- range(n) returns [0..n), range(a, b) returns [a..b).
