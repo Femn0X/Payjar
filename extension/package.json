@@ -1,0 +1,26 @@
+{
+  "name": "payjar-language",
+  "displayName": "Payjar (.pj)",
+  "description": "Syntax highlighting for the Payjar language (.pj files)",
+  "version": "1.0.0",
+  "publisher": "Femn0X",
+  "engines": { "vscode": "^1.60.0" },
+  "categories": ["Programming Languages"],
+  "contributes": {
+    "languages": [
+      {
+        "id": "payjar",
+        "aliases": ["Payjar", "pj"],
+        "extensions": [".pj"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "payjar",
+        "scopeName": "source.pj",
+        "path": "./syntaxes/payjar.tmLanguage.json"
+      }
+    ]
+  }
+}

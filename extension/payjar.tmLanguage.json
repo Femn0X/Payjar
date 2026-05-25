@@ -1,0 +1,179 @@
+{
+  "name": "Payjar",
+  "scopeName": "source.pj",
+  "fileTypes": ["pj"],
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#strings" },
+    { "include": "#backtick-strings" },
+    { "include": "#regex-strings" },
+    { "include": "#numbers" },
+    { "include": "#keywords" },
+    { "include": "#types" },
+    { "include": "#builtin-functions" },
+    { "include": "#builtin-modules" },
+    { "include": "#class-names" },
+    { "include": "#function-definitions" },
+    { "include": "#function-calls" },
+    { "include": "#operators" },
+    { "include": "#punctuation" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.double-slash.pj",
+          "match": "//.*$"
+        },
+        {
+          "name": "comment.block.pj",
+          "begin": "/\\*",
+          "end": "\\*/",
+          "beginCaptures": { "0": { "name": "punctuation.definition.comment.pj" } },
+          "endCaptures":   { "0": { "name": "punctuation.definition.comment.pj" } }
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.pj",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [{ "name": "constant.character.escape.pj", "match": "\\\\." }]
+        },
+        {
+          "name": "string.quoted.single.pj",
+          "begin": "'",
+          "end": "'",
+          "patterns": [{ "name": "constant.character.escape.pj", "match": "\\\\." }]
+        }
+      ]
+    },
+    "backtick-strings": {
+      "name": "string.template.pj",
+      "begin": "`",
+      "end": "`",
+      "patterns": [
+        {
+          "name": "meta.template.expression.pj",
+          "begin": "\\$\\{",
+          "end": "\\}",
+          "beginCaptures": { "0": { "name": "punctuation.definition.template-expression.begin.pj" } },
+          "endCaptures":   { "0": { "name": "punctuation.definition.template-expression.end.pj" } },
+          "patterns": [{ "include": "$self" }]
+        }
+      ]
+    },
+    "regex-strings": {
+      "name": "string.regexp.pj",
+      "begin": "§[\"']",
+      "end": "[\"']",
+      "beginCaptures": { "0": { "name": "punctuation.definition.string.begin.pj" } },
+      "endCaptures":   { "0": { "name": "punctuation.definition.string.end.pj" } }
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.float.pj",
+          "match": "\\b[0-9]+\\.[0-9]+\\b"
+        },
+        {
+          "name": "constant.numeric.integer.pj",
+          "match": "\\b[0-9]+\\b"
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.pj",
+          "match": "\\b(if|else|while|for|in|return|pass)\\b"
+        },
+        {
+          "name": "keyword.declaration.pj",
+          "match": "\\b(let|const|var|func|class|new|import|from|as|package)\\b"
+        },
+        {
+          "name": "keyword.modifier.pj",
+          "match": "\\b(public|private)\\b"
+        },
+        {
+          "name": "variable.language.pj",
+          "match": "\\b(self|inner_self|innerSelf)\\b"
+        },
+        {
+          "name": "constant.language.pj",
+          "match": "\\b(true|false|null)\\b"
+        },
+        {
+          "name": "keyword.operator.logical.pj",
+          "match": "\\b(and|or|not)\\b"
+        },
+        {
+          "name": "keyword.special.pj",
+          "match": "\\b(main|range)\\b"
+        }
+      ]
+    },
+    "types": {
+      "name": "support.type.pj",
+      "match": "\\b(Int|Float|String|Str|Null|Any|Array)\\b"
+    },
+    "builtin-functions": {
+      "name": "support.function.builtin.pj",
+      "match": "\\b(println|printerr|readln|readi|readf|print|toStr|toInt|toFloat|len|strLen|charAt|strSlice|strContains|strReplace|strSplit|strTrim|strStartsWith|strEndsWith|readFile|writeFile|appendFile|exit|listLen|range|typeOf|pow|match)\\b(?=\\s*\\()"
+    },
+    "builtin-modules": {
+      "name": "support.class.pj",
+      "match": "\\b(math|io|random|regex|gui|sqllite3)\\b"
+    },
+    "class-names": {
+      "name": "entity.name.type.pj",
+      "match": "(?<=class\\s)\\b[A-Z][a-zA-Z0-9_]*\\b"
+    },
+    "function-definitions": {
+      "name": "entity.name.function.pj",
+      "match": "(?<=func\\s)\\b[a-zA-Z_][a-zA-Z0-9_]*\\b"
+    },
+    "function-calls": {
+      "name": "entity.name.function.call.pj",
+      "match": "\\b([a-zA-Z_][a-zA-Z0-9_]*)(?=\\s*\\()"
+    },
+    "operators": {
+      "patterns": [
+        {
+          "name": "keyword.operator.comparison.pj",
+          "match": "(==|!=|<=|>=|<|>)"
+        },
+        {
+          "name": "keyword.operator.assignment.pj",
+          "match": "(\\+=|-=|=)"
+        },
+        {
+          "name": "keyword.operator.arithmetic.pj",
+          "match": "(\\+\\+|--|\\+|-|\\*|/|%)"
+        },
+        {
+          "name": "keyword.operator.arrow.pj",
+          "match": "->"
+        },
+        {
+          "name": "keyword.operator.pj",
+          "match": "(\\^|\\|\\||&&|!|@|\\?)"
+        }
+      ]
+    },
+    "punctuation": {
+      "patterns": [
+        { "name": "punctuation.terminator.pj",  "match": ";" },
+        { "name": "punctuation.separator.pj",   "match": "," },
+        { "name": "punctuation.accessor.pj",    "match": "\\." },
+        { "name": "punctuation.definition.pj",  "match": ":" },
+        { "name": "meta.brace.curly.pj",        "match": "[{}]" },
+        { "name": "meta.brace.square.pj",       "match": "[\\[\\]]" },
+        { "name": "meta.brace.round.pj",        "match": "[()]" }
+      ]
+    }
+  }
+}
