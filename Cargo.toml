@@ -2,18 +2,29 @@
 name = "Payjar"
 version = "0.1.0"
 edition = "2024"
+
+[[bin]]
+name = "Payjar"
+path = "src/main.rs"
+
+[dependencies]
+eframe    = "0.27"
+egui      = "0.27"
+rfd       = "0.14"
+rusqlite  = { version = "0.31", features = ["bundled"] }
+regex     = "1"
+serde_json = "1"
+tempfile  = "3"
+sha2      = "0.10"
+md-5      = "0.10"
+base64    = "0.22"
+
 [profile.release]
 overflow-checks = true
 
-[dependencies]
-tempfile="3.5"
-eframe="0.28"
-egui="0.25"
-rfd="0.10"
-
 [package.metadata.deb]
-maintainer = "Your Name <you@example.com>"
-copyright = "2026, Your Name"
+maintainer = "Femn0X"
+copyright = "2026,Femn0X"
 license-file = ["LICENSE", "0"]
 extended-description = """\
 A longer description of your package.

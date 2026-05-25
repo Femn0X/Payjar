@@ -1,2 +1,5 @@
+cargo build
+ls -s ./target/debug/Payjar ./pjc
+
 cargo build -r
-cargo run -r
+ls -s ./target/release/Payjar ./pjc
