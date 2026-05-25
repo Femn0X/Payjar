@@ -1,6 +1,6 @@
 # PayJar
 
-PayJar is a simple, lightweight interpreter for the **PJ** esoteric programming language. Starting with version 1.1.0, the interpreter is rewritten in **Rust** for improved performance and memory safety. The language is designed to be familiar to Java/JavaScript developers with a minimal syntax, modern features, and a tiny runtime.
+PayJar is a simple, lightweight interpreter for the **Paygar** programming language. The interpreter core is implemented in **Rust** for improved performance and memory safety. The language is designed to be familiar to Java/JavaScript developers with a minimal syntax, modern features, and a tiny runtime.
 
 The repository also contains a React‑based IDE (`react-ide/`) that can be used to edit and run PayJar programs in the browser or as a Tauri desktop application.
 
@@ -58,7 +58,7 @@ The language is intentionally small but expressive enough to build non‑trivial
 
 ## Building the Interpreter
 
-### Rust (v1.1.0+)
+### Rust
 
 Requires Rust toolchain (`rustup`/`cargo`):
 
@@ -66,15 +66,7 @@ Requires Rust toolchain (`rustup`/`cargo`):
 cargo build --release
 ```
 
-The binary will be placed at `target/release/pjc`.
-
-### Legacy C build
-
-The old C interpreter source (`payjar.c`) is still included for reference. Build with:
-
-```bash
-make all
-```
+The binary will be placed at `target/release/Payjar`.
 
 ---
 
@@ -83,16 +75,8 @@ make all
 Run a `.pj` file directly:
 
 ```bash
-./pjc examples/hello.pj
+./target/release/Payjar examples/hello.pj
 ```
-
-Use `pjrt` to run a package directory (with optional debug output):
-
-```bash
-./pjrt -d .
-```
-
----
 
 ## Examples
 
@@ -100,9 +84,9 @@ The `examples/` directory contains sample programs:
 
 - `hello.pj` – a "Hello, world!" program demonstrating basic syntax.
 - `advanced.pj` – showcases classes, loops, I/O, and other language constructs.
-- `examples/package-ex` – a package example.
+- `examples/pack/` – a package example.
 
-Feel free to modify or add your own `.pj` files and run them with `pjc` or `pjrt`.
+Feel free to modify or add your own `.pj` files and run them with `Payjar` .
 
 ---
 
