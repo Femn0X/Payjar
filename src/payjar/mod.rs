@@ -5,6 +5,7 @@ pub mod lexer;
 pub mod parser;
 pub mod builtins;
 pub mod sqlite3;
+pub mod gui_channel;
 
 // Re-export everything callers need
 pub use ast::{AstNode, NodeType};

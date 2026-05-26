@@ -530,33 +530,21 @@ pub fn eval_gui_builtin(name: &str, args: Vec<Value>) -> Value {
     }
 
     fn spawn_wait(
-    title: &str,
-    size: [f32; 2],
-    app: impl eframe::App + Send + 'static,
-) {
-    let t = title.to_string();
-    let (tx, rx) = mpsc::channel::<()>();
-
-    std::thread::spawn(move || {
-        let opts = eframe::NativeOptions {
-            viewport: egui::ViewportBuilder::default()
-                .with_title(&t)
-                .with_inner_size(size)
-                .with_resizable(false),
-            ..Default::default()
-        };
-
-        let _ = eframe::run_native(
-            &t,
-            opts,
-            Box::new(|_| Box::new(app) as Box<dyn eframe::App>),
-        );
-
-        let _ = tx.send(());
-    });
-
-    let _ = rx.recv();
-}
+        title: &str,
+        size: [f32; 2],
+        app: impl eframe::App + Send + 'static,
+    ) {
+        use super::gui_channel::{GuiRequest, gui_send};
+        let (done_tx, done_rx) = mpsc::channel::<()>();
+        gui_send(GuiRequest {
+            title: title.to_string(),
+            size,
+            app: Box::new(app),
+            done_tx,
+        });
+        // Block the interpreter thread until main thread closes the window.
+        let _ = done_rx.recv();
+    }
 
     match name {
         "alert" | "msgbox" => {

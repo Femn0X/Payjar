@@ -56,6 +56,28 @@ The language is intentionally small but expressive enough to build non‑trivial
 
 ---
 
+## Built-in Modules
+
+PayJar includes the following modules accessed via dot notation (e.g., `math.sin(x)`, `json.parse(str)`, etc.):
+
+| Module | Description |
+|---|---|
+| `math` | Mathematical constants (pi, e, tau) and functions (sin, cos, sqrt, pow, etc.) |
+| `cmath` | Complex number operations (complex, real, imag, abs, phase, polar, etc.) |
+| `json` | JSON parsing and serialization (parse, stringify, readFile, writeFile) |
+| `os` | Operating system functions (getcwd, chdir, listdir, mkdir, rename, etc.) |
+| `sys` | System information (platform, arch, argv, exit, version, stdin, stdout, stderr) |
+| `time` | Time and date operations (now, nowMs, sleep, sleepMs, format) |
+| `base64` | Base64 encoding and decoding (encode, decode, encodeBytes) |
+| `hash` | Cryptographic hashing (sha256, sha512, md5, sha256File) |
+| `regex` | Regular expressions (test, match, matchGroup, findAll, replace, split, valid) |
+| `random` | Random number generation (randint, random, randFloat, choice, shuffle) |
+| `gui` | Graphical user interface (alert, confirm, prompt, notify) |
+| `sqlite3` | SQLite database operations |
+| `io` | Input/output functions (print, println, readln, readi, readf) |
+
+---
+
 ## Building the Interpreter
 
 ### Rust
