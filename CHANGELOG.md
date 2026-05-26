@@ -6,6 +6,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.2.0] - 2025-05-25
+
+## Added 
+
+- buildin modules like sqlite3,math,os,csv
+
+## changes 
+
+- removed pjrt and "replaced" it with pagackes example :
+```text
+  <package-name>/
+  |- init.pj #the file that gets imported
+  |- ... more file
+  |<file>.pj #can import <package-main>  
+```
+
+## fixed
+
+- fixed import error for built-in modules
+- fixed error when trying to run a file that use'S gui built-in
+
 ## [1.1.0] - 2026-05-09
 
 ### Added
