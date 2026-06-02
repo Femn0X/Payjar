@@ -5,6 +5,23 @@ All notable changes to the PayJar project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
+## [1.3.0] - [unreleased]
+
+## Added 
+
+- new net built-in for http/https networking
+
+## Removed
+
+- N/A
+
+## Changed
+
+- Optimisted Payjar by editing Cargo.toml &  all files in src
+
+## Fixed 
+ 
+- fixed Type checking
 
 ## [1.2.0] - 2025-05-25
 
@@ -12,7 +29,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - buildin modules like sqlite3,math,os,csv
 
-## changes 
+## Changed
 
 - removed pjrt and "replaced" it with pagackes example :
 ```text
