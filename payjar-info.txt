@@ -46,6 +46,6 @@ CONTROL
 
 NOTES
 -----
-- All built-ins are available globally without any import.
+- All built-in function are available globally without any import.
 - File paths are relative to the working directory of the interpreter.
 - range(n) returns [0..n), range(a, b) returns [a..b).
