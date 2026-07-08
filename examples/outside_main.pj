@@ -1,0 +1,30 @@
+// Functions and classes no longer have to live inside `main` — define
+// them anywhere in the file, before or after the entry point, and `main`
+// can still see and use them.
+
+func square(n:Int)->Int{
+    return n*n;
+}
+
+class Greeter(@inner_self){
+    let name:Any;
+
+    func init(n:Any)->Null{
+        self.name=n;
+    }
+    func hello()->Null{
+        println(`Hello, ${self.name}! ${square(4)} is 4 squared.`);
+    }
+}
+
+public class main(@self){
+    let g:Any=new Greeter("Payjar");
+    g.hello();
+    farewell(g.name);
+}
+
+// This helper is defined *after* main, and is still visible to it —
+// top-level def/class declarations are hoisted before main runs.
+func farewell(n:Any)->Null{
+    println(`Goodbye, ${n}!`);
+}

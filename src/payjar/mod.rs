@@ -18,7 +18,6 @@ use std::fs;
 use std::io::{self, BufRead, Write};
 use std::process;
 use std::rc::Rc;
-
 // ============================================================
 // TOKEN TYPES  (used by lexer, parser, and interpreter)
 // ============================================================
@@ -28,7 +27,7 @@ pub enum TokenType {
     Import, Public, Private, Class, Enum, Main, Self_, InnerSelf,
     Def, Print, Perror, Let, Const, Var, New,
     Readln, Readi, Readf, Return, If, Else, While, For, In, Range,
-    Package,
+    Package,Continue,Break,
     And, Or, Not,
     PlusEqual, MinusEqual,
     Identifier, Number, FloatLiteral, StringLiteral, BacktickString, RegexString,
@@ -100,34 +99,42 @@ pub enum Value {
     Null,
     Object(Rc<RefCell<PJObject>>),
     List(Rc<RefCell<Vec<Value>>>),
+    Map(Rc<RefCell<rustc_hash::FxHashMap<String, Value>>>),
 }
 
 impl Value {
     pub fn as_int(&self) -> i64 {
         match self {
-            Value::Null      => 0,
             Value::Int(i)    => *i,
             Value::Float(f)  => *f as i64,
-            Value::Str(_)    => 0,
-            _ => 0,
+            Value::Comp(c)   =>  c.real as i64,
+            _=>0,
         }
     }
     pub fn as_float(&self) -> f64 {
         match self {
-            Value::Null     => 0.0,
             Value::Int(i)   => *i as f64,
             Value::Float(f) => *f,
-            Value::Str(_)   => 0.0,
-            _ => 0.0,
+            Value::Comp(c)  => c.real,
+            _=>0.0,
         }
     }
     pub fn as_complex(&self) -> Complex {
         match self {
-            Value::Null      => Complex::new(0.0, 0.0),
             Value::Int(i)    => Complex::new(*i as f64, 0.0),
             Value::Float(f)  => Complex::new(*f, 0.0),
             Value::Comp(c)   => Complex::new(c.real, c.imag),
-            _ => Complex::new(0.0, 0.0),
+            Value::List(a)   => {
+             let vals = a.borrow();
+             let len = vals.len();
+             if len!=2{
+              Complex::new(0.0,0.0) 
+             }
+             else {
+              Complex::new(vals[0].as_float(),vals[1].as_float())
+             }
+            }
+            _=>Complex::new(0.0,0.0),
         }
     }
     pub fn truthy(&self) -> bool {
@@ -136,7 +143,8 @@ impl Value {
             Value::Int(i)    => *i != 0,
             Value::Float(f)  => *f != 0.0,
             Value::Str(s)    => !s.is_empty(),
-            _ => true,
+            Value::Comp(c)   => c.real!=0.0||c.imag!=0.0,
+            _ => false,
         }
     }
     pub fn to_string_repr(&self) -> String {
@@ -147,7 +155,7 @@ impl Value {
                 else { format!("{}", f) }
             }
             Value::Str(s)    => s.clone(),
-            Value::Null      => "null".to_string(),
+            Value::Null      => "Null".to_string(),
             Value::Object(o) => format!("<{} object>", o.borrow().class_name),
             Value::List(l)   => {
                 let items: Vec<String> = l.borrow().iter().map(|v| {
@@ -155,6 +163,14 @@ impl Value {
                     else { v.to_string_repr() }
                 }).collect();
                 format!("[{}]", items.join(", "))
+            }
+            Value::Map(m) => {
+                let b = m.borrow();
+                let mut pairs: Vec<String> = b.iter()
+                    .map(|(k, v)| format!("'{}': {}", k, if let Value::Str(s) = v { format!("'{}'", s) } else { v.to_string_repr() }))
+                    .collect();
+                pairs.sort();
+                format!("{{{}}}", pairs.join(", "))
             }
             _ => "".to_string(),
         }
@@ -178,6 +194,14 @@ impl Value {
                 }
                 print!("]");
             }
+            Value::Map(m) => {
+                let b = m.borrow();
+                let mut pairs: Vec<String> = b.iter()
+                    .map(|(k, v)| format!("'{}': {}", k, if let Value::Str(s) = v { format!("'{}'", s) } else { v.to_string_repr() }))
+                    .collect();
+                pairs.sort();
+                print!("{{{}}}", pairs.join(", "));
+            }
             _ => {}
         }
     }
@@ -199,6 +223,14 @@ impl Value {
                     if let Value::Str(s) = v { eprint!("'{}'", s); } else { v.perror(); }
                 }
                 eprint!("]");
+            }
+            Value::Map(m) => {
+                let b = m.borrow();
+                let mut pairs: Vec<String> = b.iter()
+                    .map(|(k, v)| format!("'{}': {}", k, if let Value::Str(s) = v { format!("'{}'", s) } else { v.to_string_repr() }))
+                    .collect();
+                pairs.sort();
+                eprint!("{{{}}}", pairs.join(", "));
             }
             _ => {}
         }
@@ -336,7 +368,7 @@ fn create_builtin_module(name: &str) -> Rc<RefCell<PJObject>> {
 }
 
 fn register_builtin_modules(env: &mut Env) {
-    for name in &["math", "io", "sqlite3", "sqllite3", "random", "regex", "gui"] {
+    for name in &["math", "io", "sqlite3", "sqllite3", "random", "regex", "gui", "net"] {
         let obj = create_builtin_module(name);
         Scope::set_declare(&env.scope, name, Value::Object(obj), false);
     }
@@ -349,6 +381,8 @@ fn register_builtin_modules(env: &mut Env) {
 enum Signal {
     None,
     Return(Value),
+    Break,
+    Continue,
 }
 
 // ============================================================
@@ -365,7 +399,7 @@ pub fn call_func_with_vals(
     env.scope = Scope::new(Some(Rc::clone(&saved_scope)));
 
     let mut param_offset = 0;
-    if func_def.is_method && func_def.params.first().map(String::as_str) == Some("self") {
+    if func_def.is_method() && func_def.params.first().map(String::as_str) == Some("self") {
         if let Some(ref obj) = self_obj {
             Scope::set_declare(&env.scope, "self", Value::Object(Rc::clone(obj)), false);
         }
@@ -387,6 +421,9 @@ pub fn call_func_with_vals(
     for stmt in &body {
         match visit_stmt(env, stmt, self_obj.clone()) {
             Signal::Return(v) => { ret = v; break; }
+            Signal::Break | Signal::Continue => {
+                eprintln!("Runtime Error: 'break'/'continue' used outside of a loop"); process::exit(1);
+            }
             Signal::None => {}
         }
     }
@@ -412,7 +449,7 @@ fn visit_stmt(env: &mut Env, node: &AstNode, self_obj: Option<Rc<RefCell<PJObjec
         }
         NodeType::VarDecl => {
             let v = eval(env, node.expr.as_ref().unwrap(), self_obj);
-            Scope::set_declare(&env.scope, node.name.as_deref().unwrap(), v, node.is_const);
+            Scope::set_declare(&env.scope, node.name.as_deref().unwrap(), v, node.is_const());
             Signal::None
         }
         NodeType::Assign => {
@@ -436,7 +473,10 @@ fn visit_stmt(env: &mut Env, node: &AstNode, self_obj: Option<Rc<RefCell<PJObjec
             let cond = eval(env, node.expr.as_ref().unwrap(), self_obj.clone());
             if cond.truthy() {
                 for stmt in &node.body {
-                    if let s @ Signal::Return(_) = visit_stmt(env, stmt, self_obj.clone()) { return s; }
+                    match visit_stmt(env, stmt, self_obj.clone()) {
+                        Signal::None => {}
+                        s => return s,
+                    }
                 }
             } else {
                 let mut handled = false;
@@ -444,7 +484,10 @@ fn visit_stmt(env: &mut Env, node: &AstNode, self_obj: Option<Rc<RefCell<PJObjec
                     let ecv = eval(env, ec, self_obj.clone());
                     if ecv.truthy() {
                         for stmt in &node.else_if_bodies[ei] {
-                            if let s @ Signal::Return(_) = visit_stmt(env, stmt, self_obj.clone()) { return s; }
+                            match visit_stmt(env, stmt, self_obj.clone()) {
+                                Signal::None => {}
+                                s => return s,
+                            }
                         }
                         handled = true;
                         break;
@@ -452,36 +495,50 @@ fn visit_stmt(env: &mut Env, node: &AstNode, self_obj: Option<Rc<RefCell<PJObjec
                 }
                 if !handled {
                     for stmt in &node.else_body {
-                        if let s @ Signal::Return(_) = visit_stmt(env, stmt, self_obj.clone()) { return s; }
+                        match visit_stmt(env, stmt, self_obj.clone()) {
+                            Signal::None => {}
+                            s => return s,
+                        }
                     }
                 }
             }
             Signal::None
         }
         NodeType::While => {
-            loop {
+            let outer = Rc::clone(&env.scope);
+            'while_loop: loop {
                 let cond = eval(env, node.expr.as_ref().unwrap(), self_obj.clone());
                 if !cond.truthy() { break; }
+                env.scope = Scope::new(Some(Rc::clone(&outer)));
                 for stmt in &node.body {
-                    if let s @ Signal::Return(_) = visit_stmt(env, stmt, self_obj.clone()) { return s; }
+                    match visit_stmt(env, stmt, self_obj.clone()) {
+                        Signal::Return(v) => { env.scope = Rc::clone(&outer); return Signal::Return(v); }
+                        Signal::Break    => { env.scope = Rc::clone(&outer); break 'while_loop; }
+                        Signal::Continue => { env.scope = Rc::clone(&outer); continue 'while_loop; }
+                        Signal::None     => {}
+                    }
                 }
+                env.scope = Rc::clone(&outer);
             }
             Signal::None
         }
         NodeType::For => {
-            if node.is_method {
+            if node.is_method() {
                 let iter = eval(env, node.object.as_ref().unwrap(), self_obj.clone());
                 let items = match iter {
                     Value::List(ref l) => l.borrow().clone(),
                     _ => { eprintln!("Runtime Error: for-in requires a list"); process::exit(1); }
                 };
-                for item in items {
+                'for_in: for item in items {
                     let saved = Rc::clone(&env.scope);
                     env.scope = Scope::new(Some(Rc::clone(&saved)));
                     Scope::set_declare(&env.scope, node.name.as_deref().unwrap(), item, false);
                     for stmt in &node.body {
-                        if let s @ Signal::Return(_) = visit_stmt(env, stmt, self_obj.clone()) {
-                            env.scope = saved; return s;
+                        match visit_stmt(env, stmt, self_obj.clone()) {
+                            Signal::Return(v) => { env.scope = saved; return Signal::Return(v); }
+                            Signal::Break     => { env.scope = saved; break 'for_in; }
+                            Signal::Continue  => { env.scope = saved; continue 'for_in; }
+                            Signal::None      => {}
                         }
                     }
                     env.scope = saved;
@@ -491,18 +548,30 @@ fn visit_stmt(env: &mut Env, node: &AstNode, self_obj: Option<Rc<RefCell<PJObjec
                 env.scope = Scope::new(Some(Rc::clone(&saved)));
                 let init_val = eval(env, node.left.as_ref().unwrap(), self_obj.clone());
                 Scope::set_declare(&env.scope, node.name.as_deref().unwrap(), init_val, false);
-                loop {
+                'for_c: loop {
                     let cond = eval(env, node.expr.as_ref().unwrap(), self_obj.clone());
                     if !cond.truthy() { break; }
                     let body_saved = Rc::clone(&env.scope);
                     env.scope = Scope::new(Some(Rc::clone(&body_saved)));
+                    let mut do_continue = false;
                     for stmt in &node.body {
-                        if let s @ Signal::Return(_) = visit_stmt(env, stmt, self_obj.clone()) {
-                            env.scope = body_saved; env.scope = saved; return s;
+                        match visit_stmt(env, stmt, self_obj.clone()) {
+                            Signal::Return(v) => {
+                                env.scope = Rc::clone(&saved); return Signal::Return(v);
+                            }
+                            Signal::Break    => {
+                                env.scope = Rc::clone(&saved); break 'for_c;
+                            }
+                            Signal::Continue => { do_continue = true; break; }
+                            Signal::None     => {}
                         }
                     }
                     env.scope = body_saved;
+                    // Always run the post-step, even on continue
                     visit_stmt(env, node.right.as_ref().unwrap(), self_obj.clone());
+                    if !do_continue {
+                        // normal iteration — post-step already ran above
+                    }
                 }
                 env.scope = saved;
             }
@@ -531,16 +600,23 @@ fn visit_stmt(env: &mut Env, node: &AstNode, self_obj: Option<Rc<RefCell<PJObjec
             let lst = eval(env, node.object.as_ref().unwrap(), self_obj.clone());
             let idx = eval(env, node.left.as_ref().unwrap(), self_obj.clone());
             let newval = eval(env, node.expr.as_ref().unwrap(), self_obj);
-            if let Value::List(ref l) = lst {
-                let mut items = l.borrow_mut();
-                let i = idx.as_int() as usize;
-                if i >= items.len() { eprintln!("Runtime Error: List index out of range"); process::exit(1); }
-                items[i] = newval;
-            } else {
-                eprintln!("Runtime Error: Cannot index-assign on non-list"); process::exit(1);
+            match lst {
+                Value::List(ref l) => {
+                    let mut items = l.borrow_mut();
+                    let i = idx.as_int() as usize;
+                    if i >= items.len() { eprintln!("Runtime Error: List index out of range"); process::exit(1); }
+                    items[i] = newval;
+                }
+                Value::Map(ref m) => {
+                    let key = idx.to_string_repr();
+                    m.borrow_mut().insert(key, newval);
+                }
+                _ => { eprintln!("Runtime Error: Cannot index-assign on non-list/map"); process::exit(1); }
             }
             Signal::None
         }
+        NodeType::Break    => Signal::Break,
+        NodeType::Continue => Signal::Continue,
         NodeType::Import  => Signal::None,
         NodeType::FieldDecl => Signal::None,
         _ => { eval(env, node, self_obj); Signal::None }
@@ -623,6 +699,12 @@ pub fn eval(env: &mut Env, node: &AstNode, self_obj: Option<Rc<RefCell<PJObject>
                         eprintln!("Runtime Error: String index out of range"); process::exit(1);
                     }
                     Value::Str(chars[i as usize].to_string())
+                }
+                Value::Map(ref m) => {
+                    let key = idx.to_string_repr();
+                    m.borrow().get(&key).cloned().unwrap_or_else(|| {
+                        eprintln!("Runtime Error: Map key '{}' not found", key); process::exit(1);
+                    })
                 }
                 _ => { eprintln!("Runtime Error: Cannot index into that type"); process::exit(1); }
             }
@@ -737,7 +819,7 @@ pub fn eval(env: &mut Env, node: &AstNode, self_obj: Option<Rc<RefCell<PJObject>
             });
             let fields: Vec<PJField> = cls.fields.iter().map(|fd| {
                 let fv = if let Some(ref e) = fd.expr { eval(env, e, None) } else { Value::Null };
-                PJField { name: fd.name.clone().unwrap(), val: fv, is_const: fd.is_const }
+                PJField { name: fd.name.clone().unwrap(), val: fv, is_const: fd.is_const() }
             }).collect();
             let obj = Rc::new(RefCell::new(PJObject {
                 class_name: class_name.to_string(),
@@ -761,7 +843,7 @@ pub fn eval(env: &mut Env, node: &AstNode, self_obj: Option<Rc<RefCell<PJObject>
             let member_name = node.name.as_deref().unwrap();
             match obj_val {
                 Value::List(ref l) => {
-                    if node.is_call {
+                    if node.is_call() {
                         let avals: Vec<Value> = node.args.iter()
                             .map(|a| eval(env, a, self_obj.clone()))
                             .collect();
@@ -808,7 +890,7 @@ pub fn eval(env: &mut Env, node: &AstNode, self_obj: Option<Rc<RefCell<PJObject>
                     }
                 }
                 Value::Object(ref obj_rc) => {
-                    if node.is_call {
+                    if node.is_call() {
                         let class_name = obj_rc.borrow().class_name.clone();
                         if let Some(v) = builtins::eval_builtin_module_method(
                             class_name.as_str(), member_name, &node.args, env, self_obj.clone())
@@ -835,6 +917,21 @@ pub fn eval(env: &mut Env, node: &AstNode, self_obj: Option<Rc<RefCell<PJObject>
                 }
                 _ => { eprintln!("Runtime Error: Member access on non-object/list"); process::exit(1); }
             }
+        }
+
+
+        NodeType::Dict => {
+            use rustc_hash::FxHashMap;
+            let mut map: FxHashMap<String, Value> = FxHashMap::default();
+            // args are interleaved: [key_node, val_node, key_node, val_node, ...]
+            let mut i = 0;
+            while i + 1 < node.args.len() {
+                let key = node.args[i].str_val.clone().unwrap_or_default();
+                let val = eval(env, &node.args[i + 1], self_obj.clone());
+                map.insert(key, val);
+                i += 2;
+            }
+            Value::Map(Rc::new(RefCell::new(map)))
         }
 
         NodeType::Array | NodeType::Generic => {
@@ -922,21 +1019,27 @@ fn collect_imports(tokens: &[Token]) -> Vec<(String, Option<String>)> {
 fn load_package_file(env: &mut Env, path: &str, debug: bool, target_pkg: &str) {
     let src = match fs::read_to_string(path) {
         Ok(s) => s,
-        Err(_) => { if debug { println!("[pjrt] Skipping '{}' (cannot open)", path); } return; }
+        Err(_) => { if debug { println!("[import] Skipping '{}' (cannot open)", path); } return; }
     };
     let tokens = tokenize(&src);
-    if tokens.iter().any(|t| t.typ == TokenType::Import) {
-        eprintln!("pjrt Error: file '{}' contains an import statement.", path); process::exit(1);
+    // Resolve any builtin imports declared at the top of the package file.
+    for (pkg_name, alias) in collect_imports(&tokens) {
+        if matches!(pkg_name.as_str(), "math"|"io"|"sqlite3"|"sqllite3"|"random"|"regex"|"gui"|"os"|"sys"|"net") {
+            load_folder_package(env, &pkg_name, alias.as_deref(), debug);
+        } else {
+            eprintln!("Import Error: package files may only import built-in modules, not '{}'", pkg_name);
+            process::exit(1);
+        }
     }
     let pkg_name = match detect_package(&tokens) {
         Some(p) => p,
-        None => { if debug { println!("[pjrt] Skipping '{}' (no package declaration)", path); } return; }
+        None => { if debug { println!("[import] Skipping '{}' (no package declaration)", path); } return; }
     };
     if pkg_name != target_pkg {
-        if debug { println!("[pjrt] Skipping '{}' (package '{}' != target '{}')", path, pkg_name, target_pkg); }
+        if debug { println!("[import] Skipping '{}' (package '{}' != target '{}')", path, pkg_name, target_pkg); }
         return;
     }
-    if debug { println!("[pjrt] Loading package '{}' from '{}'", pkg_name, path); }
+    if debug { println!("[import] Loading package '{}' from '{}'", pkg_name, path); }
     let mut parser = Parser::new(tokens);
     let pkg_ast = parser.parse_package_file();
     for node in &pkg_ast.body {
@@ -949,7 +1052,7 @@ fn load_package_file(env: &mut Env, path: &str, debug: bool, target_pkg: &str) {
 }
 
 fn load_folder_package(env: &mut Env, pkg_name: &str, alias: Option<&str>, debug: bool) {
-    if matches!(pkg_name, "math"|"io"|"sqlite3"|"sqllite3"|"random"|"regex"|"gui"|"os"|"sys") {
+    if matches!(pkg_name, "math"|"io"|"sqlite3"|"sqllite3"|"random"|"regex"|"gui"|"os"|"sys"|"net") {
         if let Some(alias_name) = alias {
             let obj_val = Scope::get(&env.scope, pkg_name);
             if alias_name != pkg_name {
@@ -998,7 +1101,7 @@ fn load_folder_package(env: &mut Env, pkg_name: &str, alias: Option<&str>, debug
                 if node.typ == NodeType::FuncDef {
                     env.funcs.insert(node.name.clone().unwrap(), node.clone());
                     let mut method = node.clone();
-                    method.is_method = false;
+                    method.set_is_method(false);
                     synthetic_class.methods.push(method);
                 } else if node.typ == NodeType::ClassDef {
                     env.classes.insert(node.name.clone().unwrap(), node.clone());
@@ -1024,7 +1127,7 @@ pub fn interpret_file(path: &str, debug: bool) {
     });
     let tokens = tokenize(&src);
     if let Some(pkg) = detect_package(&tokens) {
-        eprintln!("Error: '{}' is a package file (package {}). Use pjrt.", path, pkg); process::exit(1);
+        eprintln!("Error: '{}' is a package file (package {}) and cannot be run directly.", path, pkg); process::exit(1);
     }
     if debug {
         println!("=== TOKENS ===");
@@ -1045,7 +1148,7 @@ pub fn interpret_file(path: &str, debug: bool) {
 pub fn interpret(code: &str, debug: bool) {
     let tokens = tokenize(code);
     if let Some(pkg) = detect_package(&tokens) {
-        eprintln!("Error: code is a package file (package {}). Use pjrt.", pkg); process::exit(1);
+        eprintln!("Error: code is a package file (package {}) and cannot be run directly.", pkg); process::exit(1);
     }
     if debug {
         println!("=== TOKENS ===");
@@ -1063,46 +1166,6 @@ pub fn interpret(code: &str, debug: bool) {
     run(&mut env, &prog);
 }
 
-pub fn pjrt_run(debug: bool, pkgn: &str, skip: &str) {
-    let mut env = Env::new();
-    let entries = fs::read_dir(".").unwrap_or_else(|_| {
-        eprintln!("pjrt Error: cannot open current directory"); process::exit(1);
-    });
-    let mut pkg_count = 0;
-    for entry in entries.flatten() {
-        let name = entry.file_name().to_string_lossy().to_string();
-        if name == skip || name == "main.pj" || !name.ends_with(".pj") { continue; }
-        let before = env.funcs.len() + env.classes.len();
-        load_package_file(&mut env, &name, debug, pkgn);
-        if env.funcs.len() + env.classes.len() > before { pkg_count += 1; }
-    }
-    if pkg_count == 0 {
-        eprintln!("pjrt Error: package '{}' not found in current directory", pkgn); process::exit(1);
-    }
-    if debug { println!("[pjrt] Loaded file(s) for package: {}.", pkgn); }
-    let src = fs::read_to_string("main.pj").unwrap_or_else(|_| {
-        eprintln!("Error: Cannot open file 'main.pj'"); process::exit(1);
-    });
-    let tokens = tokenize(&src);
-    if let Some(p) = detect_package(&tokens) {
-        eprintln!("pjrt Error: main.pj declares package {}. main.pj must not declare a package.", p);
-        process::exit(1);
-    }
-    if tokens.iter().any(|t| t.typ == TokenType::Import) {
-        eprintln!("pjrt Error: main.pj contains an import statement. pjrt does not support imports.");
-        process::exit(1);
-    }
-    if debug {
-        println!("=== TOKENS (main.pj) ===");
-        for (i, t) in tokens.iter().enumerate() { println!("  [{}] type={:?} value={}", i, t.typ, t.value); }
-        println!("========================");
-    }
-    let mut parser = Parser::new(tokens);
-    let prog = parser.parse_program();
-    if debug { println!("=== Parse OK (main.pj) ==="); }
-    run(&mut env, &prog);
-}
-
 pub fn autorun(debug: bool, skip: &str) {
     let skips: Vec<&str> = skip.trim_matches(|c| c == '[' || c == ']').split(',').collect();
     let entries = fs::read_dir(".").unwrap_or_else(|_| {
@@ -1117,20 +1180,11 @@ pub fn autorun(debug: bool, skip: &str) {
 
 pub fn print_usage_pjc() {
     println!("pjc usage:");
+    println!("  cli               open cli mode");
+    println!("  version           show payjar version");
     println!("  help              show this help page");
     println!("  autorun           autorun all pj files");
     println!("    -s <file>       skip <file> in autorun");
     println!("  -d <file>.pj      enable debug");
     println!("  <file>.pj         interpret <file>.pj");
-}
-
-pub fn print_usage_pjrt() {
-    println!("pjrt (PayJar RunTime) usage:");
-    println!("  help              show this help page");
-    println!("  run <package>     load package from current dir and run main.pj");
-    println!("  -d                enable debug mode");
-    println!("  -s <file>         skip <file>");
-    println!();
-    println!("pjrt scans all .pj files in the current directory for 'package <n>;'");
-    println!("declarations and loads them before running main.pj.");
 }

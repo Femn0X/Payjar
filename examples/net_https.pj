@@ -1,0 +1,11 @@
+import net;
+
+public class main(@self){
+    // https:// now performs a real TLS handshake (via rustls) instead of
+    // failing with "HTTPS requires TLS".
+    let code:Int=net.getStatus("https://example.com");
+    println(`Status: ${code}`);
+
+    let body:Any=net.get("https://example.com");
+    println(body);
+}

@@ -10,20 +10,26 @@ pub enum NodeType {
     BinaryOp, UnaryOp, LogicalOp, Index, IndexAssign,
     Int, Float, RegexString, Str, Array, Null, TemplateStr,
     VarAccess, Readln, Readi, Readf, For, Generic,
+    Break, Continue,
+    Dict,
 }
 
 #[derive(Debug, Clone)]
 pub struct AstNode {
-    pub own_type: String,
-    pub var_type: String,
     pub typ: NodeType,
     pub int_val: i64,
     pub fval: f64,
+    /// Flags packed: bit0=is_method, bit1=is_const, bit2=is_call
+    pub flags: u8,
+    pub own_type: String,
+    pub var_type: String,
     pub str_val: Option<String>,
+    pub name: Option<String>,
     pub left: Option<Box<AstNode>>,
     pub right: Option<Box<AstNode>>,
     pub expr: Option<Box<AstNode>>,
     pub object: Option<Box<AstNode>>,
+    pub constructor: Option<Box<AstNode>>,
     pub body: Vec<AstNode>,
     pub args: Vec<AstNode>,
     pub else_if_conds: Vec<AstNode>,
@@ -33,26 +39,25 @@ pub struct AstNode {
     pub methods: Vec<AstNode>,
     pub template_parts: Vec<AstNode>,
     pub params: Vec<String>,
-    pub is_method: bool,
-    pub is_const: bool,
-    pub is_call: bool,
-    pub name: Option<String>,
-    pub constructor: Option<Box<AstNode>>,
 }
 
 impl AstNode {
+    #[inline]
     pub fn new(typ: NodeType) -> Self {
         AstNode {
-            own_type: "".to_string(),
-            var_type: "".to_string(),
             typ,
             int_val: 0,
             fval: 0.0,
+            flags: 0,
+            own_type: String::new(),
+            var_type: String::new(),
             str_val: None,
+            name: None,
             left: None,
             right: None,
             expr: None,
             object: None,
+            constructor: None,
             body: Vec::new(),
             args: Vec::new(),
             else_if_conds: Vec::new(),
@@ -62,11 +67,15 @@ impl AstNode {
             methods: Vec::new(),
             template_parts: Vec::new(),
             params: Vec::new(),
-            is_method: false,
-            is_const: false,
-            is_call: false,
-            name: None,
-            constructor: None,
         }
     }
+
+    // ── flag accessors ────────────────────────────────────────
+    #[inline(always)] pub fn is_method(&self) -> bool { self.flags & 1 != 0 }
+    #[inline(always)] pub fn is_const(&self)  -> bool { self.flags & 2 != 0 }
+    #[inline(always)] pub fn is_call(&self)   -> bool { self.flags & 4 != 0 }
+
+    #[inline(always)] pub fn set_is_method(&mut self, v: bool) { if v { self.flags |= 1 } else { self.flags &= !1 } }
+    #[inline(always)] pub fn set_is_const(&mut self,  v: bool) { if v { self.flags |= 2 } else { self.flags &= !2 } }
+    #[inline(always)] pub fn set_is_call(&mut self,   v: bool) { if v { self.flags |= 4 } else { self.flags &= !4 } }
 }

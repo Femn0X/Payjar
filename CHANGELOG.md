@@ -5,11 +5,16 @@ All notable changes to the PayJar project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
-## [1.3.0] - [unreleased]
+## [1.3.0] - 2026-07-08
 
-## Added 
+## Added
 
-- new net built-in for http/https networking
+- new net built-in for http/https networking — `https://` URLs now do a real TLS handshake (via `rustls`, verified against the OS trust store) instead of failing; `http://` still works over plain TCP
+- Tkinter-style GUI window builder: `gui.window`, `gui.addLabel`, `gui.addButton`, `gui.addEntry`, `gui.addCheckbox`, `gui.addSeparator`, `gui.show` — build a whole form out of widgets and open it as a *single* window instead of one window per component; classic `gui.alert`/`confirm`/`prompt`/`notify` dialogs are unchanged
+- top-level `def`/`class` (and `public class`) definitions are now allowed outside of `main`, in any order, before or after it
+- class names can be used as variable/parameter/field types, Java-style, e.g. `let r:Rect = new Rect(10, 10);`
+- package files (`package foo;`) can now `import` built-in modules (`math`, `net`, `gui`, `io`, `sqlite3`, `random`, `regex`, `os`, `sys`) and use them directly
+- template string interpolation (`` `${...}` ``) now evaluates full expressions — function calls, indexing, arithmetic, etc. (e.g. `` `${square(4)}` ``, `` `${result["key"]}` ``) — not just bare variable/field names
 
 ## Removed
 
@@ -18,10 +23,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## Changed
 
 - Optimisted Payjar by editing Cargo.toml &  all files in src
+- `rustls` dependency pinned to a real published version (`0.23`, ring backend) instead of a nonexistent `0.24.0-dev.0`
 
-## Fixed 
- 
+## Fixed
+
 - fixed Type checking
+- fixed `net.get`/`net.getStatus`/`net.post` argument handling (previously indexed past the given argument count and referenced an undefined variable, so HTTP requests could crash or fail to compile)
 
 ## [1.2.0] - 2025-05-25
 

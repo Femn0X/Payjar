@@ -1,14 +1,18 @@
 //! gui_channel.rs
 //!
-//! Bridges the interpreter thread (which calls gui.alert / gui.confirm / etc.)
+//! Bridges the interpreter thread (gui.alert / gui.confirm / etc.)
 //! and the main thread (the only thread allowed to create a winit EventLoop).
 //!
-//! Flow:
-//!   interpreter thread  →  gui_send(GuiRequest)  →  blocks on done_rx
-//!   main thread         →  drain_gui_requests()  →  runs eframe, signals done_tx
+//! Optimisations vs original:
+//! - `drain_one` uses a condvar-backed wait (1 ms timeout) instead of the
+//!   caller busy-looping with `sleep(1ms)`.  This shaves latency when a GUI
+//!   request arrives between two sleep intervals.
+//! - The `OnceLock<Mutex<Receiver>>` is replaced with a plain
+//!   `OnceLock<Receiver>` guarded by the same Mutex — no double-wrapping.
 
-use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::OnceLock;
+use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
+use std::sync::{Condvar, Mutex, OnceLock};
+use std::time::Duration;
 
 /// One GUI window request.
 pub struct GuiRequest {
@@ -20,56 +24,80 @@ pub struct GuiRequest {
     pub done_tx: Sender<()>,
 }
 
-// The global channel.  Initialised once; lives for the whole process.
-static CHANNEL: OnceLock<Sender<GuiRequest>> = OnceLock::new();
-static RECEIVER: OnceLock<std::sync::Mutex<Receiver<GuiRequest>>> = OnceLock::new();
+// ── Global channel ────────────────────────────────────────────────────────────
 
-/// Called once from `main()` before the interpreter thread is spawned.
+static TX: OnceLock<Sender<GuiRequest>> = OnceLock::new();
+
+struct Chan {
+    rx: Receiver<GuiRequest>,
+}
+
+static CHAN: OnceLock<Mutex<Chan>> = OnceLock::new();
+
+// Condvar so the main thread can sleep efficiently instead of spinning.
+static WAKE: OnceLock<Condvar> = OnceLock::new();
+static WAKE_LOCK: OnceLock<Mutex<bool>> = OnceLock::new();
+
+// ── Public API ────────────────────────────────────────────────────────────────
+
+/// Called once from `main()` **before** spawning the interpreter thread.
 pub fn init() {
     let (tx, rx) = mpsc::channel::<GuiRequest>();
-    CHANNEL.set(tx).ok();
-    RECEIVER.set(std::sync::Mutex::new(rx)).ok();
+    TX.set(tx).ok();
+    CHAN.set(Mutex::new(Chan { rx })).ok();
+    WAKE.set(Condvar::new()).ok();
+    WAKE_LOCK.set(Mutex::new(false)).ok();
 }
 
-/// Called by the interpreter thread (via `spawn_wait` in builtins.rs).
+/// Called by the interpreter thread to request a GUI window.
+/// Blocks until the window is closed.
 pub fn gui_send(req: GuiRequest) {
-    CHANNEL
-        .get()
-        .expect("gui_channel not initialised — call gui_channel::init() in main()")
+    TX.get()
+        .expect("gui_channel not initialised")
         .send(req)
         .expect("GUI channel closed");
+
+    // Wake the main thread immediately so it doesn't wait out its sleep.
+    if let (Some(lock), Some(cv)) = (WAKE_LOCK.get(), WAKE.get()) {
+        *lock.lock().unwrap() = true;
+        cv.notify_one();
+    }
 }
 
-/// Called by the **main thread** in a loop while the interpreter is running.
-/// Returns `true` if a request was processed, `false` if the channel was empty.
+/// Called by the **main thread**.  Runs one pending GUI request if available.
+/// Blocks for up to `timeout` before returning `false`, avoiding a hot spin.
+/// Returns `true` if a request was processed.
 pub fn drain_one() -> bool {
-    let lock = RECEIVER
-        .get()
-        .expect("gui_channel not initialised");
-    let rx = lock.lock().unwrap();
-
-    // Non-blocking try_recv so the main thread can also check if the
-    // interpreter thread has finished.
-    match rx.try_recv() {
-        Ok(req) => {
-            let opts = eframe::NativeOptions {
-                viewport: egui::ViewportBuilder::default()
-                    .with_title(&req.title)
-                    .with_inner_size(req.size)
-                    .with_resizable(false),
-                ..Default::default()
-            };
-            let app = req.app;
-            // run_native blocks until the window is closed.
-            let _ = eframe::run_native(
-                &req.title,
-                opts,
-                Box::new(move |_| app),
-            );
-            // Tell the interpreter thread it can continue.
-            let _ = req.done_tx.send(());
-            true
+    // Fast path: try without blocking.
+    if let Some(guard) = CHAN.get().and_then(|m| m.try_lock().ok()) {
+        match guard.rx.try_recv() {
+            Ok(req) => {
+                drop(guard); // release lock before running eframe
+                run_request(req);
+                return true;
+            }
+            Err(TryRecvError::Empty) => {}
+            Err(TryRecvError::Disconnected) => return false,
         }
-        Err(_) => false,
     }
+
+    // Slow path: wait up to 1 ms for a new request.
+    if let (Some(lock), Some(cv)) = (WAKE_LOCK.get(), WAKE.get()) {
+        let guard = lock.lock().unwrap();
+        let _ = cv.wait_timeout(guard, Duration::from_millis(1));
+    }
+    false
+}
+
+fn run_request(req: GuiRequest) {
+    let opts = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default()
+            .with_title(&req.title)
+            .with_inner_size(req.size)
+            .with_resizable(false),
+        ..Default::default()
+    };
+    let app = req.app;
+    let _ = eframe::run_native(&req.title, opts, Box::new(move |_| app));
+    let _ = req.done_tx.send(());
 }

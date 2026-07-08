@@ -1,8 +1,8 @@
 // Advanced Payjar Program - Variables and Control Flow
 public class main(@self){
-var x = 10;
-var y = 20;
-var sum = x + y;
+var x:Int = 10;
+var y:Int = 20;
+var sum:Int = x + y;
 println(`X =${x}`);
 println(`Y=${y}`);
 println(`Sum=${sum}`);
@@ -15,7 +15,7 @@ if (sum > 25) {
 }
 
 // Loop example
-var i = 0;
+var i:Int = 0;
 while (i < 5) {
     println(`Iteration:${i}`);
     i = i + 1;

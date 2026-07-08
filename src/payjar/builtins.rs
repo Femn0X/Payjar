@@ -1,9 +1,11 @@
 use std::process;
-use std::io::{self, BufRead, Write};
+use std::io::{self, BufRead, Write,BufReader,Read};
 use std::fs;
 use std::rc::Rc;
 use std::cell::RefCell;
-
+use std::net::TcpStream;
+use std::time::Duration;
+use std::process::Command;
 use super::{Value, PJObject, Env, AstNode, call_func_with_vals};
 pub use super::sqlite3::eval_sqlite3_builtin;
 
@@ -135,6 +137,13 @@ pub fn eval_json_builtin(name: &str, args: Vec<Value>) -> Value {
                 }
                 serde_json::Value::Object(map)
             }
+            Value::Map(m) => {
+                let mut map = serde_json::Map::new();
+                for (k, v) in m.borrow().iter() {
+                    map.insert(k.clone(), val_to_json(v));
+                }
+                serde_json::Value::Object(map)
+            }
             _ => serde_json::Value::Null,
         }
     }
@@ -149,11 +158,10 @@ pub fn eval_json_builtin(name: &str, args: Vec<Value>) -> Value {
             serde_json::Value::String(s) => Value::Str(s.clone()),
             serde_json::Value::Array(a)  => Value::List(Rc::new(RefCell::new(a.iter().map(json_to_val).collect()))),
             serde_json::Value::Object(o) => {
-                // Return as list of [key, value] pairs (no class system needed)
-                let pairs: Vec<Value> = o.iter().map(|(k, v)| {
-                    Value::List(Rc::new(RefCell::new(vec![Value::Str(k.clone()), json_to_val(v)])))
-                }).collect();
-                Value::List(Rc::new(RefCell::new(pairs)))
+                use rustc_hash::FxHashMap;
+                let mut map: FxHashMap<String, Value> = FxHashMap::default();
+                for (k, v) in o.iter() { map.insert(k.clone(), json_to_val(v)); }
+                Value::Map(std::rc::Rc::new(std::cell::RefCell::new(map)))
             }
         }
     }
@@ -208,7 +216,6 @@ pub fn eval_json_builtin(name: &str, args: Vec<Value>) -> Value {
 // OS
 // ============================================================
 pub fn eval_os_builtin(name: &str, args: Vec<Value>) -> Value {
-    use std::process::Command;
     match name {
         "getcwd"  => Value::Str(std::env::current_dir().map(|p| p.display().to_string()).unwrap_or_default()),
         "chdir"   => { need!(args,1); std::env::set_current_dir(args[0].to_string_repr()).ok(); Value::Null }
@@ -252,7 +259,7 @@ pub fn eval_sys_builtin(name: &str, args: Vec<Value>) -> Value {
         "arch"     => Value::Str(std::env::consts::ARCH.to_string()),
         "argv"     => { let a: Vec<Value>=std::env::args().map(Value::Str).collect(); Value::List(Rc::new(RefCell::new(a))) }
         "exit"     => { let code=if !args.is_empty(){args[0].as_int() as i32}else{0}; process::exit(code); }
-        "version"  => Value::Str("Payjar 0.1.0".to_string()),
+        "version"  => Value::Str("Payjar 1.3.0".to_string()),
         "stdin"    => { let mut l=String::new(); io::stdin().lock().read_line(&mut l).ok(); if l.ends_with('\n'){l.pop();} Value::Str(l) }
         "stdout"   => { need!(args,1); print!("{}",args[0].to_string_repr()); io::stdout().flush().ok(); Value::Null }
         "stderr"   => { need!(args,1); eprint!("{}",args[0].to_string_repr()); Value::Null }
@@ -291,7 +298,7 @@ pub fn eval_time_builtin(name: &str, args: Vec<Value>) -> Value {
         "timestamp" => {
             // Parse "YYYY-MM-DD HH:MM:SS" → unix seconds (very basic)
             need!(args,1);
-            let s = args[0].to_string_repr();
+            let _s = args[0].to_string_repr();
             // Just return 0 for now — full parsing needs chrono
             eprintln!("time.timestamp: use time.now() for current timestamp; parsing not yet supported");
             Value::Int(0)
@@ -466,10 +473,222 @@ pub fn eval_random_builtin(name: &str, args: Vec<Value>) -> Value {
 }
 
 // ============================================================
-// GUI  — real egui windows (each call blocks until closed)
+// GUI — real egui windows
+// ------------------------------------------------------------
+// Two styles are supported:
+//
+//   1. Quick modal dialogs (alert/confirm/prompt/notify) — each of these
+//      still opens a single small window of its own, same as before.
+//
+//   2. A Tkinter-like window *builder*: `gui.window(...)` creates one
+//      window handle, `gui.addLabel/addButton/addEntry/addCheckbox(...)`
+//      add widgets to *that same window* (nothing pops open yet), and a
+//      single `gui.show(handle)` call finally displays them all together
+//      in one frame and blocks until the user closes it / clicks a button.
+//      This means a whole form with several labels, entries and buttons
+//      opens exactly one window instead of one window per widget.
 // ============================================================
+
+#[derive(Clone)]
+enum GuiWidget {
+    Label(String),
+    Separator,
+    Button(String),
+    Entry { placeholder: String },
+    Checkbox { text: String, checked: bool },
+}
+
+struct GuiWindowSpec {
+    title: String,
+    width: f32,
+    height: f32,
+    widgets: Vec<GuiWidget>,
+}
+
+thread_local! {
+    static GUI_WINDOWS: RefCell<std::collections::HashMap<i64, GuiWindowSpec>> =
+        RefCell::new(std::collections::HashMap::new());
+}
+
+fn gui_next_handle() -> i64 {
+    use std::sync::atomic::{AtomicI64, Ordering};
+    static NEXT: AtomicI64 = AtomicI64::new(1);
+    NEXT.fetch_add(1, Ordering::SeqCst)
+}
+
+fn gui_with_window<R>(handle: i64, f: impl FnOnce(&mut GuiWindowSpec) -> R) -> R {
+    GUI_WINDOWS.with(|m| {
+        let mut b = m.borrow_mut();
+        match b.get_mut(&handle) {
+            Some(spec) => f(spec),
+            None => {
+                eprintln!("gui: invalid window handle {handle} (did you call gui.window() first?)");
+                process::exit(1);
+            }
+        }
+    })
+}
+
+/// The single eframe App that renders every widget of a built window,
+/// stacked top-to-bottom (like Tkinter's default `pack()` layout).
+struct BuiltWindowApp {
+    widgets: Vec<GuiWidget>,
+    entry_values: Vec<String>,
+    checkbox_values: Vec<bool>,
+    clicked: Option<usize>,
+}
+
+impl eframe::App for BuiltWindowApp {
+    fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            let mut entry_i = 0usize;
+            let mut check_i = 0usize;
+            ui.add_space(8.0);
+            for (i, w) in self.widgets.iter().enumerate() {
+                match w {
+                    GuiWidget::Label(text) => { ui.label(text); }
+                    GuiWidget::Separator => { ui.separator(); }
+                    GuiWidget::Button(text) => {
+                        if ui.button(text).clicked() { self.clicked = Some(i); }
+                    }
+                    GuiWidget::Entry { placeholder } => {
+                        let val = &mut self.entry_values[entry_i];
+                        ui.add(egui::TextEdit::singleline(val).hint_text(placeholder.as_str()));
+                        entry_i += 1;
+                    }
+                    GuiWidget::Checkbox { text, .. } => {
+                        ui.checkbox(&mut self.checkbox_values[check_i], text);
+                        check_i += 1;
+                    }
+                }
+                ui.add_space(4.0);
+            }
+        });
+        if self.clicked.is_some() { ctx.send_viewport_cmd(egui::ViewportCommand::Close); }
+    }
+}
+
 pub fn eval_gui_builtin(name: &str, args: Vec<Value>) -> Value {
     use std::sync::{Arc, Mutex, mpsc};
+
+    match name {
+        // gui.window(title, width, height) -> Int handle
+        "window" => {
+            let title = if !args.is_empty() { args[0].to_string_repr() } else { "Payjar".to_string() };
+            let width  = if args.len() >= 2 { args[1].as_float() as f32 } else { 400.0 };
+            let height = if args.len() >= 3 { args[2].as_float() as f32 } else { 300.0 };
+            let handle = gui_next_handle();
+            GUI_WINDOWS.with(|m| m.borrow_mut().insert(handle, GuiWindowSpec {
+                title, width, height, widgets: Vec::new(),
+            }));
+            return Value::Int(handle);
+        }
+        // gui.addLabel(handle, text) -> Null
+        "addLabel" => {
+            need!(args, 2);
+            let handle = args[0].as_int();
+            let text = args[1].to_string_repr();
+            gui_with_window(handle, |spec| spec.widgets.push(GuiWidget::Label(text)));
+            return Value::Null;
+        }
+        // gui.addSeparator(handle) -> Null
+        "addSeparator" => {
+            need!(args, 1);
+            let handle = args[0].as_int();
+            gui_with_window(handle, |spec| spec.widgets.push(GuiWidget::Separator));
+            return Value::Null;
+        }
+        // gui.addButton(handle, text) -> Int (index to compare against `clicked`)
+        "addButton" => {
+            need!(args, 2);
+            let handle = args[0].as_int();
+            let text = args[1].to_string_repr();
+            return Value::Int(gui_with_window(handle, |spec| {
+                spec.widgets.push(GuiWidget::Button(text));
+                (spec.widgets.len() - 1) as i64
+            }));
+        }
+        // gui.addEntry(handle, placeholder?) -> Int (widget index)
+        "addEntry" => {
+            if args.is_empty() { eprintln!("gui.addEntry() takes 1-2 args"); process::exit(1); }
+            let handle = args[0].as_int();
+            let placeholder = if args.len() >= 2 { args[1].to_string_repr() } else { String::new() };
+            return Value::Int(gui_with_window(handle, |spec| {
+                spec.widgets.push(GuiWidget::Entry { placeholder });
+                (spec.widgets.len() - 1) as i64
+            }));
+        }
+        // gui.addCheckbox(handle, text, checked?) -> Int (widget index)
+        "addCheckbox" => {
+            if args.is_empty() { eprintln!("gui.addCheckbox() takes 1-3 args"); process::exit(1); }
+            let handle = args[0].as_int();
+            let text = if args.len() >= 2 { args[1].to_string_repr() } else { String::new() };
+            let checked = args.len() >= 3 && args[2].as_int() != 0;
+            return Value::Int(gui_with_window(handle, |spec| {
+                spec.widgets.push(GuiWidget::Checkbox { text, checked });
+                (spec.widgets.len() - 1) as i64
+            }));
+        }
+        // gui.show(handle) -> Map {
+        //   "clicked":  Int (widget index of clicked button, -1 if closed otherwise),
+        //   "entry0", "entry1", ...     -> Str  (in the order entries were added),
+        //   "checkbox0", "checkbox1", ... -> Int 0/1 (in the order checkboxes were added),
+        // }
+        "show" => {
+            need!(args, 1);
+            let handle = args[0].as_int();
+            let spec = GUI_WINDOWS.with(|m| m.borrow_mut().remove(&handle))
+                .unwrap_or_else(|| {
+                    eprintln!("gui.show: invalid window handle {handle}");
+                    process::exit(1);
+                });
+
+            let entry_values: Vec<String> = spec.widgets.iter()
+                .filter_map(|w| match w { GuiWidget::Entry { .. } => Some(String::new()), _ => None })
+                .collect();
+            let checkbox_values: Vec<bool> = spec.widgets.iter()
+                .filter_map(|w| match w { GuiWidget::Checkbox { checked, .. } => Some(*checked), _ => None })
+                .collect();
+
+            let app = BuiltWindowApp {
+                widgets: spec.widgets.clone(),
+                entry_values,
+                checkbox_values,
+                clicked: None,
+            };
+
+            let result: Arc<Mutex<BuiltWindowApp>> = Arc::new(Mutex::new(app));
+            let r2 = Arc::clone(&result);
+            struct WrapApp { inner: Arc<Mutex<BuiltWindowApp>> }
+            impl eframe::App for WrapApp {
+                fn update(&mut self, ctx: &egui::Context, f: &mut eframe::Frame) {
+                    self.inner.lock().unwrap().update(ctx, f);
+                }
+            }
+
+            use super::gui_channel::{GuiRequest, gui_send};
+            let (done_tx, done_rx) = mpsc::channel::<()>();
+            gui_send(GuiRequest {
+                title: spec.title.clone(),
+                size: [spec.width, spec.height],
+                app: Box::new(WrapApp { inner: r2 }),
+                done_tx,
+            });
+            let _ = done_rx.recv();
+
+            let final_app = result.lock().unwrap();
+            let mut map: rustc_hash::FxHashMap<String, Value> = rustc_hash::FxHashMap::default();
+            map.insert("clicked".to_string(), Value::Int(final_app.clicked.map(|i| i as i64).unwrap_or(-1)));
+            for (i, v) in final_app.entry_values.iter().enumerate() {
+                map.insert(format!("entry{i}"), Value::Str(v.clone()));
+            }
+            for (i, v) in final_app.checkbox_values.iter().enumerate() {
+                map.insert(format!("checkbox{i}"), Value::Int(if *v { 1 } else { 0 }));
+            }
+            return Value::Map(Rc::new(RefCell::new(map)));
+        }
+        _ => {}
+    }
 
     struct AlertApp  { title: String, msg: String, done: bool }
     struct ConfirmApp{ msg: String, result: Option<bool> }
@@ -632,7 +851,7 @@ pub fn eval_builtin_or_func(
         "appendFile"    => { need!(args,2); if let Value::Str(p)=&args[0]{ use std::io::Write as _; let mut f=std::fs::OpenOptions::new().append(true).create(true).open(p).unwrap_or_else(|_|{eprintln!("appendFile: failed");process::exit(1);}); f.write_all(args[1].to_string_repr().as_bytes()).ok(); Value::Null }else{eprintln!("appendFile: string");process::exit(1);} }
         "exit"          => { process::exit(if !args.is_empty(){args[0].as_int() as i32}else{0}); }
         "listLen"       => { need!(args,1); match &args[0]{ Value::List(l)=>Value::Int(l.borrow().len() as i64), _=>Value::Int(0) } }
-        "typeOf"        => { need!(args,1); Value::Str(match &args[0]{ Value::Int(_)=>"int", Value::Float(_)=>"float", Value::Str(_)=>"str", Value::Null=>"null", Value::Object(_)=>"object", Value::List(_)=>"list", Value::Comp(_)=>"complex" }.to_string()) }
+        "typeOf"        => { need!(args,1); Value::Str(match &args[0]{ Value::Int(_)=>"int", Value::Float(_)=>"float", Value::Str(_)=>"str", Value::Null=>"null", Value::Object(_)=>"object", Value::List(_)=>"list", Value::Comp(_)=>"complex", Value::Map(_)=>"map" }.to_string()) }
         "readi"         => { need!(args,1); print!("{}",args[0].to_string_repr()); io::stdout().flush().ok(); let mut l=String::new(); io::stdin().lock().read_line(&mut l).ok(); Value::Int(l.trim().parse().unwrap_or(0)) }
         "readf"         => { need!(args,1); print!("{}",args[0].to_string_repr()); io::stdout().flush().ok(); let mut l=String::new(); io::stdin().lock().read_line(&mut l).ok(); Value::Float(l.trim().parse().unwrap_or(0.0)) }
         "readln"        => { let p=if args.len()==1{args[0].to_string_repr()}else{String::new()}; print!("{}",p); io::stdout().flush().ok(); let mut l=String::new(); io::stdin().lock().read_line(&mut l).ok(); if l.ends_with('\n'){l.pop();} if l.ends_with('\r'){l.pop();} Value::Str(l) }
@@ -652,6 +871,244 @@ pub fn eval_builtin_or_func(
     }
 }
 
+
+// ============================================================
+// NET — HTTP(S) + raw TCP networking
+// ============================================================
+pub fn eval_net_builtin(name: &str, args: Vec<Value>) -> Value {
+    match name {
+        // ── HTTP / HTTPS (blocking) ──────────────────────────────────────────
+        // net.get(url) -> Str (response body) or Null on error
+        // Scheme (http:// or https://) is taken directly from the URL.
+        "get" => {
+            if args.is_empty() { eprintln!("net.get() takes 1 arg"); std::process::exit(1); }
+            let url = args[0].to_string_repr();
+            match get_req(&url) {
+                Ok(body) => Value::Str(body),
+                Err(e)   => { eprintln!("net.get error: {}", e); Value::Null }
+            }
+        }
+        // net.getStatus(url) -> Int (HTTP status code) or -1 on error
+        "getStatus" => {
+            if args.is_empty() { eprintln!("net.getStatus() takes 1 arg"); std::process::exit(1); }
+            let url = args[0].to_string_repr();
+            match get_status(&url) {
+                Ok(code) => Value::Int(code),
+                Err(e)   => { eprintln!("net.getStatus error: {}", e); Value::Int(-1) }
+            }
+        }
+        // net.post(url, body, content_type?) -> Str
+        "post" => {
+            if args.len() < 2 { eprintln!("net.post() takes 2-3 args"); std::process::exit(1); }
+            let url  = args[0].to_string_repr();
+            let body = args[1].to_string_repr();
+            let ct   = if args.len() >= 3 { args[2].to_string_repr() }
+                       else { "application/x-www-form-urlencoded".to_string() };
+            match post_req(&url, &body, &ct) {
+                Ok(resp) => Value::Str(resp),
+                Err(e)   => { eprintln!("net.post error: {}", e); Value::Null }
+            }
+        }
+        // ── Raw TCP ─────────────────────────────────────────────────────────
+        // net.tcpSend(host, port, data) -> Str (response, up to 64 KB)
+        "tcpSend" => {
+            if args.len() < 3 { eprintln!("net.tcpSend() takes 3 args"); std::process::exit(1); }
+            let host = args[0].to_string_repr();
+            let port = args[1].as_int() as u16;
+            let data = args[2].to_string_repr();
+            let addr = format!("{}:{}", host, port);
+            match TcpStream::connect(&addr) {
+                Err(e) => { eprintln!("net.tcpSend connect error: {}", e); Value::Null }
+                Ok(mut stream) => {
+                    stream.set_read_timeout(Some(Duration::from_secs(10))).ok();
+                    stream.write_all(data.as_bytes()).ok();
+                    let mut buf = Vec::new();
+                    stream.read_to_end(&mut buf).ok();
+                    Value::Str(String::from_utf8_lossy(&buf).into_owned())
+                }
+            }
+        }
+        // net.urlEncode(s) -> Str
+        "urlEncode" => {
+            if args.is_empty() { eprintln!("net.urlEncode() takes 1 arg"); std::process::exit(1); }
+            let s = args[0].to_string_repr();
+            let encoded: String = s.bytes().flat_map(|b| {
+                if b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || b == b'.' || b == b'~' {
+                    vec![b as char]
+                } else {
+                    format!("%{:02X}", b).chars().collect()
+                }
+            }).collect();
+            Value::Str(encoded)
+        }
+        // net.urlDecode(s) -> Str
+        "urlDecode" => {
+            if args.is_empty() { eprintln!("net.urlDecode() takes 1 arg"); std::process::exit(1); }
+            let s = args[0].to_string_repr();
+            let mut out = Vec::new();
+            let bytes = s.as_bytes();
+            let mut i = 0;
+            while i < bytes.len() {
+                if bytes[i] == b'%' && i + 2 < bytes.len() {
+                    if let Ok(h) = u8::from_str_radix(unsafe { std::str::from_utf8_unchecked(&bytes[i+1..i+3]) }, 16) {
+                        out.push(h); i += 3; continue;
+                    }
+                } else if bytes[i] == b'+' {
+                    out.push(b' '); i += 1; continue;
+                }
+                out.push(bytes[i]); i += 1;
+            }
+            Value::Str(String::from_utf8_lossy(&out).into_owned())
+        }
+        // net.parseUrl(url) -> List of [scheme, host, port, path, query]
+        "parseUrl" => {
+            if args.is_empty() { eprintln!("net.parseUrl() takes 1 arg"); std::process::exit(1); }
+            let url = args[0].to_string_repr();
+            let parts = parse_url_parts(&url);
+            Value::List(std::rc::Rc::new(std::cell::RefCell::new(
+                parts.into_iter().map(Value::Str).collect()
+            )))
+        }
+        _ => { eprintln!("net.{}() not found", name); std::process::exit(1); }
+    }
+}
+
+// ── Helpers (no external HTTP dep — raw TCP HTTP/1.1) ──────────────────────
+
+fn parse_url_parts(url: &str) -> Vec<String> {
+    let (scheme, rest) = if let Some(s) = url.strip_prefix("https://") { ("https".to_string(), s) }
+                          else if let Some(s) = url.strip_prefix("http://") { ("http".to_string(), s) }
+                          else { ("".to_string(), url) };
+    let (hostport, path_query) = match rest.find('/') {
+        Some(i) => (&rest[..i], &rest[i..]),
+        None    => (rest, "/"),
+    };
+    let (host, port) = match hostport.rsplit_once(':') {
+        Some((h, p)) => (h.to_string(), p.to_string()),
+        None => (hostport.to_string(), if scheme == "https" { "443".to_string() } else { "80".to_string() }),
+    };
+    let (path, query) = match path_query.find('?') {
+        Some(i) => (&path_query[..i], &path_query[i+1..]),
+        None    => (path_query, ""),
+    };
+    vec![scheme, host, port, path.to_string(), query.to_string()]
+}
+
+fn get_req(url: &str) -> Result<String, String> {
+    let (body, _) = raw_http(url, "GET", None, None)?;
+    Ok(body)
+}
+
+fn get_status(url: &str) -> Result<i64, String> {
+    let (_, status) = raw_http(url, "GET", None, None)?;
+    Ok(status)
+}
+
+fn post_req(url: &str, body: &str, content_type: &str) -> Result<String, String> {
+    let (resp, _) = raw_http(url, "POST", Some(body), Some(content_type))?;
+    Ok(resp)
+}
+
+// A stream that's either a plain TCP socket or a TLS-wrapped one, so the
+// HTTP/1.1 request/response logic below can stay identical for both.
+trait NetStream: Read + Write {}
+impl<T: Read + Write> NetStream for T {}
+
+/// Lazily builds (once per process) the shared rustls client config, using
+/// the OS trust store via rustls-native-certs.
+fn tls_client_config() -> Result<std::sync::Arc<rustls::ClientConfig>, String> {
+    use std::sync::OnceLock;
+    static CONFIG: OnceLock<std::sync::Arc<rustls::ClientConfig>> = OnceLock::new();
+    if let Some(cfg) = CONFIG.get() { return Ok(cfg.clone()); }
+
+    // Install rustls' default (ring-backed) crypto provider once per process.
+    // Ignore the error: it just means another caller installed it first.
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
+    let mut roots = rustls::RootCertStore::empty();
+    let native = rustls_native_certs::load_native_certs();
+    for cert in native.certs {
+        let _ = roots.add(cert);
+    }
+    if roots.is_empty() {
+        return Err("net: could not load any TLS root certificates".to_string());
+    }
+
+    let config = rustls::ClientConfig::builder()
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+    let config = std::sync::Arc::new(config);
+    let _ = CONFIG.set(config.clone());
+    Ok(config)
+}
+
+fn connect_https(host: &str, addr: &str) -> Result<Box<dyn NetStream>, String> {
+    let config = tls_client_config()?;
+    let server_name = rustls::pki_types::ServerName::try_from(host.to_string())
+        .map_err(|e| format!("net: invalid hostname '{host}': {e}"))?;
+    let conn = rustls::ClientConnection::new(config, server_name)
+        .map_err(|e| format!("net: TLS setup failed: {e}"))?;
+    let sock = TcpStream::connect(addr).map_err(|e| format!("connect {addr}: {e}"))?;
+    sock.set_read_timeout(Some(Duration::from_secs(15))).ok();
+    sock.set_write_timeout(Some(Duration::from_secs(10))).ok();
+    Ok(Box::new(rustls::StreamOwned::new(conn, sock)))
+}
+
+fn connect_http(addr: &str) -> Result<Box<dyn NetStream>, String> {
+    let sock = TcpStream::connect(addr).map_err(|e| format!("connect {addr}: {e}"))?;
+    sock.set_read_timeout(Some(Duration::from_secs(15))).ok();
+    sock.set_write_timeout(Some(Duration::from_secs(10))).ok();
+    Ok(Box::new(sock))
+}
+
+fn raw_http(url: &str, method: &str, body: Option<&str>, ct: Option<&str>) -> Result<(String, i64), String> {
+    let parts = parse_url_parts(url);
+    let (scheme, host, port_str, path, query) = (&parts[0], &parts[1], &parts[2], &parts[3], &parts[4]);
+    let port: u16 = port_str.parse().unwrap_or(if scheme == "https" { 443 } else { 80 });
+    let full_path = if query.is_empty() { path.clone() } else { format!("{}?{}", path, query) };
+
+    let addr = format!("{}:{}", host, port);
+
+    let mut stream: Box<dyn NetStream> = if scheme == "https" {
+        connect_https(host, &addr)?
+    } else {
+        connect_http(&addr)?
+    };
+
+    let body_str = body.unwrap_or("");
+    let ct_str   = ct.unwrap_or("application/x-www-form-urlencoded");
+    let request  = if method == "POST" {
+        format!("{} {} HTTP/1.1\r\nHost: {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            method, full_path, host, ct_str, body_str.len(), body_str)
+    } else {
+        format!("{} {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
+            method, full_path, host)
+    };
+
+    stream.write_all(request.as_bytes()).map_err(|e| e.to_string())?;
+
+    let mut reader = BufReader::new(stream);
+
+    // Parse status line
+    let mut status_line = String::new();
+    reader.read_line(&mut status_line).map_err(|e| e.to_string())?;
+    let status_code: i64 = status_line.split_whitespace().nth(1)
+        .and_then(|s| s.parse().ok()).unwrap_or(0);
+
+    // Skip headers
+    loop {
+        let mut line = String::new();
+        reader.read_line(&mut line).map_err(|e| e.to_string())?;
+        if line == "\r\n" || line.is_empty() { break; }
+    }
+
+    // Read body
+    let mut resp_body = String::new();
+    reader.read_to_string(&mut resp_body).map_err(|e| e.to_string())?;
+
+    Ok((resp_body, status_code))
+}
+
 // ============================================================
 // MODULE METHOD DISPATCH
 // ============================================================
@@ -661,30 +1118,19 @@ pub fn eval_builtin_module_method(
 ) -> Option<Value> {
     let args: Vec<Value> = arg_nodes.iter().map(|a| super::eval(env, a, self_obj.clone())).collect();
     match module {
-        "math" => match name {
-            "abs"|"sqrt"|"cbrt"|"floor"|"ceil"|"round"|"sum"|"min"|"max"|"ln"|"log"|"log2"|"log10"|
-            "sin"|"cos"|"tan"|"asin"|"acos"|"atan"|"atan2"|"sinh"|"cosh"|"tanh"|
-            "pow"|"exp"|"hypot"|"sign"|"clamp"|"lerp"|"pi"|"e"|"tau"|"inf"|"nan"|
-            "isNan"|"isInf"|"toRad"|"toDeg"|"trunc"|"fract"|"gcd"|"lcm"
-                => Some(eval_math_builtin(name, args)),
-            _ => None,
-        },
+        "math"            => Some(eval_math_builtin(name, args)),
         "cmath"           => Some(eval_cmath_builtin(name, args)),
         "json"            => Some(eval_json_builtin(name, args)),
         "os"              => Some(eval_os_builtin(name, args)),
-        "sys"             => Some(eval_sys_builtin(name, args)),
+        "sys"|"system"             => Some(eval_sys_builtin(name, args)),
         "time"            => Some(eval_time_builtin(name, args)),
         "base64"          => Some(eval_base64_builtin(name, args)),
         "hash"            => Some(eval_hash_builtin(name, args)),
-        "io" => match name {
-            "print"|"println"|"readln"|"readi"|"readf"
-                => Some(eval_builtin_or_func(env, name, args, self_obj)),
-            _ => None,
-        },
         "random"             => Some(eval_random_builtin(name, args)),
         "regex"              => Some(eval_regex_builtin(name, args)),
         "gui"                => Some(eval_gui_builtin(name, args)),
         "sqlite3"|"sqllite3" => Some(eval_sqlite3_builtin(name, args)),
+        "net"                 => Some(eval_net_builtin(name, args)),
         _ => None,
     }
 }

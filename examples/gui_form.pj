@@ -1,0 +1,32 @@
+import gui;
+
+// Old style (still works): each call pops open its own little window.
+//   gui.alert("Hi", "This is its own window.");
+
+// New style: build ONE window out of several widgets, then show it once.
+public class main(@self){
+    let win:Any=gui.window("Sign up", 420, 260);
+
+    gui.addLabel(win, "Name:");
+    let nameField:Any=gui.addEntry(win, "e.g. Ada");
+
+    gui.addLabel(win, "Subscribe to updates?");
+    let subBox:Any=gui.addCheckbox(win, "Yes please", 0);
+
+    gui.addSeparator(win);
+
+    let okBtn:Any=gui.addButton(win, "OK");
+    let cancelBtn:Any=gui.addButton(win, "Cancel");
+
+    // Everything above appears together in a single window here:
+    let result:Any=gui.show(win);
+
+    if (result["clicked"]==okBtn) {
+        println(`Hello, ${result["entry0"]}!`);
+        if (result["checkbox0"]==1) {
+            println("Subscribed!");
+        }
+    } else {
+        println("Cancelled.");
+    }
+}

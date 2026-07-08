@@ -49,31 +49,74 @@ impl Parser {
         }
     }
 
+    // Top-level programs may now freely mix `import` statements, top-level
+    // `def` function definitions, top-level `class` (or `public class`)
+    // definitions, and exactly one `public class main(@self){ ... }` entry
+    // point — in any order, before or after `main`. Everything is flattened
+    // into a single body; `run()` already hoists FuncDef/ClassDef nodes
+    // before executing the remaining statements, so order doesn't matter.
     pub fn parse_program(&mut self) -> AstNode {
+        let mut prog = AstNode::new(NodeType::MainDef);
+        let mut found_main = false;
         loop {
-            if self.cur().typ == TokenType::Import {
-                self.parse_import();
-            } else if self.cur().typ == TokenType::Identifier && self.cur().value == "from" {
-                self.advance();
-                self.advance();
-                self.eat(TokenType::Import);
-                self.eat(TokenType::Multiply);
-                self.eat(TokenType::Semicolon);
-            } else {
-                break;
+            let cur_typ = self.cur().typ.clone();
+            match cur_typ {
+                TokenType::Eof => break,
+                TokenType::Import => { self.parse_import(); }
+                TokenType::Identifier if self.cur().value == "from" => {
+                    self.advance();
+                    self.advance();
+                    self.eat(TokenType::Import);
+                    self.eat(TokenType::Multiply);
+                    self.eat(TokenType::Semicolon);
+                }
+                TokenType::Def => {
+                    prog.body.push(self.parse_function_definition(false));
+                }
+                TokenType::Class => {
+                    prog.body.push(self.parse_class_definition());
+                }
+                TokenType::Public if self.peek(1).typ == TokenType::Class
+                    && self.peek(2).typ == TokenType::Main =>
+                {
+                    if found_main {
+                        eprintln!("Syntax Error: only one 'public class main(@self){{...}}' is allowed per file");
+                        process::exit(1);
+                    }
+                    found_main = true;
+                    self.advance(); // public
+                    self.eat(TokenType::Class);
+                    self.eat(TokenType::Main);
+                    self.eat(TokenType::LParen);
+                    self.eat(TokenType::At);
+                    self.eat(TokenType::Self_);
+                    self.eat(TokenType::RParen);
+                    self.eat(TokenType::LBrace);
+                    let mut inner = self.parse_body();
+                    prog.body.append(&mut inner);
+                    self.eat(TokenType::RBrace);
+                }
+                TokenType::Public => {
+                    self.advance();
+                    if self.cur().typ != TokenType::Class {
+                        eprintln!("Syntax Error: expected 'class' after 'public'");
+                        process::exit(1);
+                    }
+                    prog.body.push(self.parse_class_definition());
+                }
+                _ => {
+                    eprintln!(
+                        "Syntax Error: expected 'import', top-level 'def'/'class', or 'public class main(@self){{...}}', got {:?} ('{}')",
+                        self.cur().typ, self.cur().value
+                    );
+                    process::exit(1);
+                }
             }
         }
-        self.eat(TokenType::Public);
-        self.eat(TokenType::Class);
-        self.eat(TokenType::Main);
-        self.eat(TokenType::LParen);
-        self.eat(TokenType::At);
-        self.eat(TokenType::Self_);
-        self.eat(TokenType::RParen);
-        self.eat(TokenType::LBrace);
-        let mut prog = AstNode::new(NodeType::MainDef);
-        prog.body = self.parse_body();
-        self.eat(TokenType::RBrace);
+        if !found_main {
+            eprintln!("Syntax Error: no 'public class main(@self){{...}}' entry point found in file");
+            process::exit(1);
+        }
         prog
     }
 
@@ -103,6 +146,14 @@ impl Parser {
         let mut pkg = AstNode::new(NodeType::MainDef);
         while self.cur().typ != TokenType::Eof {
             match self.cur().typ {
+                TokenType::Import => { self.parse_import(); }
+                TokenType::Identifier if self.cur().value == "from" => {
+                    self.advance();
+                    self.advance();
+                    self.eat(TokenType::Import);
+                    self.eat(TokenType::Multiply);
+                    self.eat(TokenType::Semicolon);
+                }
                 TokenType::Def => { pkg.body.push(self.parse_function_definition(false)); }
                 TokenType::Public => {
                     self.advance();
@@ -113,7 +164,7 @@ impl Parser {
                 }
                 TokenType::Class => { pkg.body.push(self.parse_class_definition()); }
                 _ => {
-                    eprintln!("Package Error: only func/class definitions allowed in package, got '{}'",
+                    eprintln!("Package Error: only 'import' and func/class definitions allowed in package, got '{}'",
                         self.cur().value);
                     process::exit(1);
                 }
@@ -138,7 +189,7 @@ impl Parser {
         let mut n = AstNode::new(NodeType::FuncDef);
         let mut t: Vec<String> = vec![];
         n.name = Some(name);
-        n.is_method = is_method;
+        n.set_is_method(is_method);
         if self.cur().typ != TokenType::RParen {
             if self.cur().typ == TokenType::Self_ {
                 n.params.push("self".to_string());
@@ -194,7 +245,7 @@ impl Parser {
                     self.eat(TokenType::Semicolon);
                     let mut fd = AstNode::new(NodeType::FieldDecl);
                     fd.name = Some(fname);
-                    fd.is_const = is_const;
+                    fd.set_is_const(is_const);
                     fd.expr = fval;
                     n.fields.push(fd);
                 }
@@ -265,23 +316,23 @@ impl Parser {
                         }
                         i += 2;
                         let vstart = i;
-                        while i < len && chars[i] != '}' { i += 1; }
+                        // ${...} can contain nested braces (e.g. a call with a
+                        // block-like arg is unlikely, but nested {} in general
+                        // expressions isn't, so just track depth defensively).
+                        let mut depth = 0i32;
+                        while i < len && !(chars[i] == '}' && depth == 0) {
+                            if chars[i] == '{' { depth += 1; }
+                            if chars[i] == '}' { depth -= 1; }
+                            i += 1;
+                        }
                         let varexpr: String = chars[vstart..i].iter().collect();
                         i += 1;
-                        let part_node = if let Some(dot_pos) = varexpr.find('.') {
-                            let obj_n = &varexpr[..dot_pos];
-                            let mem_n = &varexpr[dot_pos + 1..];
-                            let mut obj_node = AstNode::new(NodeType::VarAccess);
-                            obj_node.name = Some(obj_n.to_string());
-                            let mut ma = AstNode::new(NodeType::MemberAccess);
-                            ma.object = Some(Box::new(obj_node));
-                            ma.name = Some(mem_n.to_string());
-                            ma
-                        } else {
-                            let mut va = AstNode::new(NodeType::VarAccess);
-                            va.name = Some(varexpr);
-                            va
-                        };
+                        // Parse the interpolated text as a full expression, so
+                        // things like `${square(4)}`, `${a.b}`, `${a+b}` all work,
+                        // not just bare variable/single-field access.
+                        let sub_tokens = super::tokenize(&varexpr);
+                        let mut sub_parser = Parser::new(sub_tokens);
+                        let part_node = sub_parser.parse_expression();
                         n.template_parts.push(part_node);
                     } else if i < len {
                         buf.push(chars[i]);
@@ -388,7 +439,7 @@ impl Parser {
                     ma.object = Some(Box::new(node));
                     ma.name = Some(member);
                     if self.cur().typ == TokenType::LParen {
-                        ma.is_call = true;
+                        ma.set_is_call(true);
                         self.advance();
                         if self.cur().typ != TokenType::RParen {
                             ma.args.push(self.parse_expression());
@@ -437,7 +488,7 @@ impl Parser {
                         ma.object = Some(Box::new(result));
                         ma.name = Some(member);
                         if self.cur().typ == TokenType::LParen {
-                            ma.is_call = true;
+                            ma.set_is_call(true);
                             self.advance();
                             if self.cur().typ != TokenType::RParen {
                                 ma.args.push(self.parse_expression());
@@ -464,7 +515,7 @@ impl Parser {
                         ma.object = Some(Box::new(obj));
                         ma.name = Some(member);
                         if self.cur().typ == TokenType::LParen {
-                            ma.is_call = true;
+                            ma.set_is_call(true);
                             self.advance();
                             if self.cur().typ != TokenType::RParen {
                                 ma.args.push(self.parse_expression());
@@ -494,6 +545,32 @@ impl Parser {
                 // plain variable
                 let mut n = AstNode::new(NodeType::VarAccess);
                 n.name = Some(name);
+                n
+            }
+            TokenType::LBrace => {
+                // Dict literal: { key: expr, key: expr, ... }
+                self.advance(); // consume '{'
+                let mut n = AstNode::new(NodeType::Dict);
+                while self.cur().typ != TokenType::RBrace && self.cur().typ != TokenType::Eof {
+                    // key: identifier or string literal
+                    let key = self.cur().value.clone();
+                    match self.cur().typ {
+                        TokenType::Identifier | TokenType::StringLiteral => { self.advance(); }
+                        _ => {
+                            eprintln!("Syntax Error: dict key must be identifier or string, got '{:?}'", self.cur().typ);
+                            process::exit(1);
+                        }
+                    }
+                    self.eat(TokenType::Colon);
+                    let val = self.parse_expression();
+                    // store key as a Str node, value as the expr; interleaved in args
+                    let mut key_node = AstNode::new(NodeType::Str);
+                    key_node.str_val = Some(key);
+                    n.args.push(key_node);
+                    n.args.push(val);
+                    if self.cur().typ == TokenType::Comma { self.advance(); }
+                }
+                self.eat(TokenType::RBrace);
                 n
             }
             _ => {
@@ -606,6 +683,12 @@ impl Parser {
                 self.eat(TokenType::Any);
                 while self.cur().typ == TokenType::Multiply { self.advance(); re += "*"; }
             }
+            TokenType::Identifier => {
+                // A user-defined class name used as a type, e.g. `let r:Rect = new Rect(10,10);`
+                re += &self.cur().value;
+                self.eat(TokenType::Identifier);
+                while self.cur().typ == TokenType::Multiply { self.advance(); re += "*"; }
+            }
             _ => {
                 eprintln!("TypeError: {:?} is not a valid type", self.cur().value);
                 process::exit(1);
@@ -623,20 +706,42 @@ impl Parser {
         let var_type = self.parse_type();
         self.eat(TokenType::Equal);
         let val = self.parse_expression();
-        let is_ptr_type = var_type.contains('*');
-        let is_list_node = matches!(val.typ, NodeType::Array | NodeType::Generic);
-        if is_ptr_type && !is_list_node {
-            eprintln!("TypeError: '{}' declared as pointer type '{}' but assigned a non-list value", name, var_type);
+        let declared_depth = var_type.chars().filter(|&c| c == '*').count();
+        let is_dict_node = val.typ == NodeType::Dict;
+        // For Array (no stars) allow a dict literal
+        if var_type == "Array" && !is_dict_node && matches!(val.typ, NodeType::Array | NodeType::Generic) {
+            // plain Array — ok, no depth to verify
+        } else if var_type == "Array" && !is_dict_node && !matches!(val.typ, NodeType::Array | NodeType::Generic) {
+            eprintln!("TypeError: '{}' declared as 'Array' but assigned a non-collection", name);
             process::exit(1);
-        }
-        if !is_ptr_type && is_list_node {
-            eprintln!("TypeError: '{}' declared as '{}' but assigned a list — did you mean '{}*'?", name, var_type, var_type);
-            process::exit(1);
+        } else if !is_dict_node {
+            fn list_depth(node: &AstNode) -> usize {
+                if !matches!(node.typ, NodeType::Array | NodeType::Generic) { return 0; }
+                1 + node.args.iter().map(list_depth).max().unwrap_or(0)
+            }
+            let actual_depth = list_depth(&val);
+            if declared_depth > 0 && actual_depth == 0 {
+                eprintln!("TypeError: '{}' declared as pointer type '{}' but assigned a non-list value", name, var_type);
+                process::exit(1);
+            }
+            if declared_depth == 0 && actual_depth > 0 {
+                let stars: String = "*".repeat(actual_depth);
+                eprintln!("TypeError: '{}' declared as '{}' but assigned a depth-{} list — did you mean '{}{}'?",
+                    name, var_type, actual_depth, var_type, stars);
+                process::exit(1);
+            }
+            if declared_depth > 0 && actual_depth > 0 && declared_depth != actual_depth {
+                let stars: String = "*".repeat(actual_depth);
+                eprintln!("TypeError: '{}' declared as '{}' (depth {}) but list has depth {} — did you mean '{}{}'?",
+                    name, var_type, declared_depth, actual_depth,
+                    var_type.trim_end_matches('*'), stars);
+                process::exit(1);
+            }
         }
         self.eat(TokenType::Semicolon);
         let mut n = AstNode::new(NodeType::VarDecl);
         n.name = Some(name);
-        n.is_const = is_const;
+        n.set_is_const(is_const);
         n.expr = Some(Box::new(val));
         n.var_type = var_type;
         n
@@ -776,7 +881,7 @@ impl Parser {
         let mut n = AstNode::new(NodeType::For);
         n.name = Some(var_name);
         if self.cur().typ == TokenType::Colon || self.cur().typ == TokenType::In {
-            n.is_method = true;
+            n.set_is_method(true);
             if self.cur().typ == TokenType::Colon {
                 self.eat(TokenType::Colon);
                 let var_type = self.parse_type();
@@ -789,7 +894,7 @@ impl Parser {
             n.body = self.parse_body();
             self.eat(TokenType::RBrace);
         } else {
-            n.is_method = false;
+            n.set_is_method(false);
             self.eat(TokenType::Equal);
             n.left = Some(Box::new(self.parse_expression()));
             self.eat(TokenType::Semicolon);
@@ -827,6 +932,16 @@ impl Parser {
             TokenType::For => self.parse_for(),
             TokenType::Return => self.parse_return_stmt(),
             TokenType::Import => self.parse_import(),
+            TokenType::Break => {
+                self.advance();
+                self.eat(TokenType::Semicolon);
+                AstNode::new(NodeType::Break)
+            }
+            TokenType::Continue => {
+                self.advance();
+                self.eat(TokenType::Semicolon);
+                AstNode::new(NodeType::Continue)
+            }
             _ => {
                 // index assign: name[expr] = expr;
                 if cur_typ == TokenType::Identifier && self.peek(1).typ == TokenType::LBrack {
@@ -890,7 +1005,7 @@ impl Parser {
                             ma.object = Some(Box::new(obj));
                             ma.name = Some(member);
                             if self.cur().typ == TokenType::LParen {
-                                ma.is_call = true;
+                                ma.set_is_call(true);
                                 self.advance();
                                 if self.cur().typ != TokenType::RParen {
                                     ma.args.push(self.parse_expression());
@@ -903,7 +1018,7 @@ impl Parser {
                             }
                             obj = ma;
                         }
-                        if obj.typ == NodeType::MemberAccess && obj.is_call {
+                        if obj.typ == NodeType::MemberAccess && obj.is_call() {
                             self.eat(TokenType::Semicolon);
                         }
                         return obj;

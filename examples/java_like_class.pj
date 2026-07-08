@@ -1,0 +1,14 @@
+class Rect(@innerSelf){
+ let a:Int;
+ let b:Int;
+ func init(a:Int,b:Int)->Null{
+  self.a=a;self.b=b;
+ }
+ func area()->Int{
+  return self.a*self.b;
+ }
+}
+public class main(@self){
+ let a:Rect=new Rect(10,10);
+ println(a.area());
+}

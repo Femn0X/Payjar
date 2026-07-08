@@ -1,6 +1,6 @@
 [package]
 name = "Payjar"
-version = "0.1.0"
+version = "1.3.0"
 edition = "2024"
 
 [[bin]]
@@ -8,31 +8,43 @@ name = "Payjar"
 path = "src/main.rs"
 
 [dependencies]
-eframe    = "0.27"
-egui      = "0.27"
-rfd       = "0.14"
-rusqlite  = { version = "0.31", features = ["bundled"] }
-regex     = "1"
+eframe     = "0.27"
+egui       = "0.27"
+rfd        = "0.14"
+rusqlite   = { version = "0.31", features = ["bundled"] }
+regex      = "1"
 serde_json = "1"
-tempfile  = "3"
-sha2      = "0.10"
-md-5      = "0.10"
-base64    = "0.22"
+tempfile   = "3"
+sha2       = "0.10"
+md-5       = "0.10"
+base64     = "0.22"
+rustc-hash = "2"
+rustls = { version = "0.23", default-features = false, features = ["logging", "std", "tls12", "ring"] }
+url        = "2.5"
+rustls-native-certs = "0.8"
+
 
 [profile.release]
-overflow-checks = true
+lto           = "fat"
+codegen-units = 1
+opt-level     = 3
+panic         = "abort"
+strip         = "symbols"
+
+[profile.dev]
+opt-level = 1
 
 [package.metadata.deb]
 maintainer = "Femn0X"
-copyright = "2026,Femn0X"
+copyright  = "2026,Femn0X"
 license-file = ["LICENSE", "0"]
-extended-description = """\
+extended-description = """
 A longer description of your package.
 """
-depends = "$auto"
-section = "utils"
+depends  = "$auto"
+section  = "utils"
 priority = "optional"
-assets = [
+assets   = [
     ["target/release/Payjar", "usr/bin/", "755"],
     ["README", "usr/share/doc/README", "644"]
 ]
