@@ -17,7 +17,6 @@ The repository also contains a React‑based IDE (`react-ide/`) that can be used
 - Template strings (backtick literals) and normal string literals
 - `println` / `print` and `readln` / `readi` / `readf` for I/O
 - Lists, index access/assignment, and object creation with `new`
-- Packages with simple file loading via `pjrt`
 
 The language is intentionally small but expressive enough to build non‑trivial examples (see `examples/`).
 
