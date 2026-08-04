@@ -1,0 +1,128 @@
+name: Build Payjar (Windows + macOS)
+
+# Runs on every push/PR to main for a quick sanity build, and produces
+# downloadable release artifacts whenever you push a tag like "v1.4.0".
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch: {}   # lets you click "Run workflow" manually in the Actions tab
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ---------------------------------------------------------------------
+  # Windows: builds Payjar.exe with the MSVC toolchain that ships on
+  # windows-latest runners (no extra setup needed for the C deps:
+  # rusqlite's bundled sqlite3 and egui/eframe both compile fine here).
+  # ---------------------------------------------------------------------
+  windows:
+    name: Windows (x86_64)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry/target
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build release binary
+        run: cargo build --release --locked
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $dest = "dist/Payjar-windows-x86_64"
+          New-Item -ItemType Directory -Force -Path $dest | Out-Null
+          Copy-Item target/release/Payjar.exe "$dest/Payjar.exe"
+          Copy-Item README.md "$dest/README.md"
+          Copy-Item -Recurse examples "$dest/examples"
+          Compress-Archive -Path "$dest/*" -DestinationPath "dist/Payjar-windows-x86_64.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Payjar-windows-x86_64
+          path: dist/Payjar-windows-x86_64.zip
+
+  # ---------------------------------------------------------------------
+  # macOS: builds both Apple Silicon (aarch64) and Intel (x86_64) on the
+  # same macos-latest runner (it ships both SDKs), then glues them into
+  # one universal binary with `lipo` so it runs natively on either Mac.
+  # ---------------------------------------------------------------------
+  macos:
+    name: macOS (universal)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable) with both Apple targets
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Cache cargo registry/target
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build arm64
+        run: cargo build --release --locked --target aarch64-apple-darwin
+
+      - name: Build x86_64
+        run: cargo build --release --locked --target x86_64-apple-darwin
+
+      - name: Merge into universal binary
+        run: |
+          mkdir -p dist/Payjar-macos-universal
+          lipo -create \
+            target/aarch64-apple-darwin/release/Payjar \
+            target/x86_64-apple-darwin/release/Payjar \
+            -output dist/Payjar-macos-universal/Payjar
+          chmod +x dist/Payjar-macos-universal/Payjar
+          cp README.md dist/Payjar-macos-universal/
+          cp -R examples dist/Payjar-macos-universal/
+          lipo -info dist/Payjar-macos-universal/Payjar
+
+      - name: Ad-hoc codesign
+        # Without this, Gatekeeper on newer macOS refuses to run an
+        # unsigned binary downloaded from the internet at all. Ad-hoc
+        # signing (no Apple Developer account needed) satisfies the
+        # local "is this binary tampered with" check; users will still
+        # see one "unidentified developer" prompt the first time unless
+        # you later add a real Developer ID + notarization.
+        run: codesign --force --deep --sign - dist/Payjar-macos-universal/Payjar
+
+      - name: Zip
+        run: |
+          cd dist
+          zip -r Payjar-macos-universal.zip Payjar-macos-universal
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Payjar-macos-universal
+          path: dist/Payjar-macos-universal.zip
+
+  # ---------------------------------------------------------------------
+  # On a tag push (e.g. `git tag v1.4.0 && git push origin v1.4.0`),
+  # collect both zip files and attach them to a GitHub Release.
+  # ---------------------------------------------------------------------
+  release:
+    name: Publish GitHub Release
+    needs: [windows, macos]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/Payjar-windows-x86_64/Payjar-windows-x86_64.zip
+            artifacts/Payjar-macos-universal/Payjar-macos-universal.zip
+          generate_release_notes: true
