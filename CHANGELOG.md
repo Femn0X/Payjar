@@ -5,23 +5,22 @@ All notable changes to the PayJar project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
-## [1.4.0] - unreleased
+## [1.4.0] - 2026-08-04
 
-## Added
+### Added
 
-- added package manager[repo alredy created]
+- Added a package-based module system for organizing PayJar code into reusable packages
+- Added support for package files to declare a package and load local modules through imports
+- Added example package layouts to demonstrate the new package workflow
 
-##  Changed 
+### Changed
 
-- N/A
+- Improved import resolution to support package-based module loading alongside built-in modules
+- Updated the project documentation to describe package usage and project structure
 
-## Changed
+### Fixed
 
-- N/A
-
-## Fixed
-
-- N/A
+- Fixed import-related issues that affected package loading and module resolution
 
 ## [1.3.0] - 2026-07-08
 
