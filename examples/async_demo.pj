@@ -1,0 +1,61 @@
+// async_demo.pj
+//
+// A focused tour of `async`/`await`.
+//
+// Calling an `async func` does NOT run its body. It hands back a Task
+// immediately. The body only runs the first time that Task is `await`ed,
+// and the result is cached -- awaiting the same Task again just returns
+// the cached value instead of running the body a second time.
+//
+// There's no real background threading here (PayJar's values aren't
+// thread-safe, so true parallelism isn't available) -- this is "lazy,
+// memoized work", which is still enough to write code that clearly
+// separates "kick this off" from "I need the result now".
+
+public class main(@self){
+
+    async func slowSquare(n: Int) -> Int {
+        println("  -> actually computing " + toStr(n) + " squared...");
+        return n * n;
+    }
+
+    async func greet(name: String) -> String {
+        println("  -> actually building the greeting for " + name + "...");
+        return "Hello, " + name + "!";
+    }
+
+    println("1. Calling two async functions back to back:");
+    let taskA: Any = slowSquare(6);
+    let taskB: Any = greet("Grace");
+    println("   Neither has run yet -- no '-> actually ...' lines above this one.");
+
+    println("2. Awaiting them (in the opposite order they were called):");
+    let greeting: String = await taskB;
+    println("   " + greeting);
+    let squared: Int = await taskA;
+    println("   6 squared is " + toStr(squared));
+
+    println("3. Awaiting the same task again reuses the cached result:");
+    let squaredAgain: Int = await taskA; // no '-> actually computing...' this time
+    println("   still " + toStr(squaredAgain) + ", and it didn't recompute.");
+
+    println("4. await on a plain (non-async) value is just a no-op:");
+    let plain: Int = 41;
+    let same: Int = await plain;
+    println("   " + toStr(same));
+
+    println("5. A little loop, kicking off several tasks before awaiting any:");
+    let tasks: Any* = [];
+    let i: Int = 1;
+    while (i <= 3) {
+        tasks.append(slowSquare(i));
+        i = i + 1;
+    }
+    println("   All 3 tasks created; nothing has run yet.");
+    let j: Int = 0;
+    while (j < len(tasks)) {
+        let result: Int = await tasks[j];
+        println("   task " + toStr(j) + " -> " + toStr(result));
+        j = j + 1;
+    }
+}

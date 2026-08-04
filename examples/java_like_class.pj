@@ -1,14 +1,33 @@
-class Rect(@innerSelf){
- let a:Int;
- let b:Int;
- func init(a:Int,b:Int)->Null{
-  self.a=a;self.b=b;
- }
- func area()->Int{
-  return self.a*self.b;
- }
+// java_like_class.pj
+//
+// Classes no longer have to be nested inside `public class main`'s body --
+// like Java, a file can declare one or more top-level classes (each
+// explicitly `public` or `private`) alongside the entry point.
+
+public class Greeter(@inner_self){
+    private let greeting: String;
+
+    public func init(self, greeting: String) -> Null {
+        self.greeting = greeting;
+    }
+
+    public func greet(self, name: String) -> String {
+        return self.greeting + ", " + name + "!";
+    }
 }
+
+// `private` at the top level works too -- only visible/usable within
+// this file (methods still need their own public/private, same as always).
+private class Doubler(@inner_self){
+    public func double(self, n: Int) -> Int {
+        return n * 2;
+    }
+}
+
 public class main(@self){
- let a:Rect=new Rect(10,10);
- println(a.area());
+    let g: Any = new Greeter("Hello");
+    println(g.greet("World"));
+
+    let d: Any = new Doubler();
+    println("double(21) = " + toStr(d.double(21)));
 }

@@ -1,0 +1,51 @@
+// complex_numbers.pj
+//
+// A tour of PayJar's Complex type.
+//
+//   - Literals: a number directly followed by `i` (no space) is an
+//     imaginary literal, e.g. `2i` or `1.5i`. Combine with ordinary
+//     arithmetic to get a full complex number: `3+2i`, `1-1i`.
+//   - `+ - * /` all work naturally between Complex, Int, and Float values.
+//   - `==`/`!=` compare real and imaginary parts; `< > <= >=` are refused
+//     for Complex, since complex numbers have no natural ordering.
+//   - The `cmath` module has the rest: cmath.abs, cmath.conj, cmath.sqrt,
+//     cmath.exp, cmath.sin/cos, cmath.polar, and more.
+
+public class main(@self){
+
+    let z1: Complex = 3+2i;
+    let z2: Complex = 1-1i;
+
+    println("z1 = " + toStr(z1));
+    println("z2 = " + toStr(z2));
+
+    println("z1 + z2 = " + toStr(z1 + z2));
+    println("z1 - z2 = " + toStr(z1 - z2));
+    println("z1 * z2 = " + toStr(z1 * z2));
+    println("z1 / z2 = " + toStr(z1 / z2));
+    println("-z1     = " + toStr(-z1));
+
+    // Complex arithmetic mixes freely with plain numbers -- a real number
+    // is just a complex number with a zero imaginary part.
+    println("z1 + 10 = " + toStr(z1 + 10));
+    println("z1 * 2  = " + toStr(z1 * 2));
+
+    // typeOf() knows about Complex too.
+    println("typeOf(z1) = " + typeOf(z1));
+
+    // Equality compares both parts; there's no <, >, <=, >= for Complex
+    // (uncomment the line below to see the runtime error):
+    println("z1 == toComplex(3, 2): " + toStr(z1 == toComplex(3, 2)));
+    // println(z1 < z2);
+
+    // The cmath module covers everything beyond +-*/:
+    println("cmath.abs(z1)   = " + toStr(cmath.abs(z1)));   // magnitude
+    println("cmath.conj(z1)  = " + toStr(cmath.conj(z1)));  // conjugate
+    println("cmath.phase(z1) = " + toStr(cmath.phase(z1))); // angle, radians
+    println("cmath.sqrt(-4)  = " + toStr(cmath.sqrt(-4)));  // 2i
+
+    // A pure-imaginary literal on its own:
+    let onlyImaginary: Complex = 7i;
+    println("7i has real part " + toStr(cmath.real(onlyImaginary))
+        + " and imaginary part " + toStr(cmath.imag(onlyImaginary)));
+}

@@ -4,7 +4,14 @@ use std::env;
 use std::io::{self, Write};
 
 fn cli() {
-    println!("Payjar 1.3.0 cli");
+    println!("Payjar 1.4.0 cli");
+    // Bugfix: this used to call `payjar::interpret(...)` for every single
+    // line, which builds a brand-new interpreter Env from scratch each time
+    // -- so every variable, function, and class typed in a previous line was
+    // silently thrown away. Keeping one Env alive for the whole session
+    // (and running each line/block against it with `interpret_repl`) is
+    // what makes the CLI actually save variables between inputs.
+    let mut env = payjar::Env::new();
     let mut multiline = false;
     let mut block = String::new();
 
@@ -22,7 +29,8 @@ fn cli() {
 
         if multiline {
             if line.is_empty() {
-                payjar::interpret(
+                payjar::interpret_repl(
+                    &mut env,
                     &format!("public class main(@self){{ {} }}", block),
                     false,
                 );
@@ -42,6 +50,7 @@ fn cli() {
 
         // Multiline starters — buffer rather than execute immediately
         if line.starts_with("func ")
+            || line.starts_with("async ")
             || line.starts_with("class ")
             || line.starts_with("if ")
             || line.starts_with("for ")
@@ -54,7 +63,8 @@ fn cli() {
         }
 
         if !line.is_empty() {
-            payjar::interpret(
+            payjar::interpret_repl(
+                &mut env,
                 &format!("public class main(@self){{ {} }}", line),
                 false,
             );
@@ -74,7 +84,7 @@ fn main() {
 
     match args[1].as_str() {
         "cli" => { cli(); }
-        "version" => { println!("1.3.0"); }
+        "version" => { println!("1.4.0"); }
         "help" => { payjar::print_usage_pjc(); }
         "autorun" => {
             let debug = args.iter().any(|a| a == "-d");

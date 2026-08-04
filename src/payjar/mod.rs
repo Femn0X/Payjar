@@ -25,9 +25,12 @@ use std::rc::Rc;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TokenType {
     Import, Public, Private, Class, Enum, Main, Self_, InnerSelf,
-    Def, Print, Perror, Let, Const, Var, New,
+    Def, Print, Perror, Let, Const, New,
     Readln, Readi, Readf, Return, If, Else, While, For, In, Range,
     Package,Continue,Break,
+    Async, Await,
+    Try, Except, Finally, Throw,
+    ComplexType, ImaginaryLiteral,
     And, Or, Not,
     PlusEqual, MinusEqual,
     Identifier, Number, FloatLiteral, StringLiteral, BacktickString, RegexString,
@@ -38,7 +41,7 @@ pub enum TokenType {
     Line, Amp, QM, Caret,
     Semicolon, Comma, Dot, Colon, At, As,
     Eof,
-    Int, Float, Null, Str, Any, Array,
+    Int, Float, Null, Str, Array,
     PlusPlus, MinusMinus, Arrow,
 }
 
@@ -67,22 +70,40 @@ pub struct Complex {
 impl Complex {
     pub fn new(r: f64, i: f64) -> Self { Self { real: r, imag: i } }
     pub fn to_display(&self) -> String {
-        let l = match self.real { 0.0 => "".to_string(), _ => self.real.to_string() };
-        let r = match self.imag {
-            0.0  => "".to_string(),
-            1.0  => "+i".to_string(),
-            -1.0 => "-i".to_string(),
-            _    => format!("{}i", self.imag),
+        let real_part = if self.real == 0.0 { String::new() } else { self.real.to_string() };
+        // Bugfix: this used to just concatenate the real part with
+        // `format!("{}i", self.imag)` for any imaginary part other than
+        // exactly +-1, so e.g. Complex{real:3, imag:2} printed as "32i"
+        // instead of "3+2i" -- indistinguishable from thirty-two i's worth
+        // of imaginary part. Now a positive imaginary part gets an explicit
+        // '+' whenever there's a real part in front of it to separate from.
+        let imag_part = if self.imag == 0.0 {
+            String::new()
+        } else if self.imag == 1.0 {
+            if real_part.is_empty() { "i".to_string() } else { "+i".to_string() }
+        } else if self.imag == -1.0 {
+            "-i".to_string()
+        } else if self.imag > 0.0 {
+            if real_part.is_empty() { format!("{}i", self.imag) } else { format!("+{}i", self.imag) }
+        } else {
+            format!("{}i", self.imag)
         };
-        format!("{}{}", l, r)
+        if real_part.is_empty() && imag_part.is_empty() { "0".to_string() } else { format!("{}{}", real_part, imag_part) }
     }
-    pub fn powc(&mut self, other: Complex) -> Complex {
-        if other.imag != 0.0 { return Complex::new(0.0, 0.0); }
-        Complex::new(self.real.powf(other.real), self.imag.powf(other.imag))
+    pub fn powc(&self, other: Complex) -> Complex {
+        // z^w = exp(w * ln(z))
+        let lnr = (self.real * self.real + self.imag * self.imag).sqrt().ln();
+        let th = self.imag.atan2(self.real);
+        let new_r = lnr * other.real - th * other.imag;
+        let new_i = lnr * other.imag + th * other.real;
+        let er = new_r.exp();
+        Complex::new(er * new_i.cos(), er * new_i.sin())
     }
     pub fn sqrt(&self) -> Complex {
-        if self.real < 0.0 { Complex::new(0.0, self.real.abs()) }
-        else { Complex::new(self.real.sqrt(), 0.0) }
+        let m = (self.real * self.real + self.imag * self.imag).sqrt();
+        let sr = ((m + self.real) / 2.0).sqrt();
+        let si = if self.imag < 0.0 { -((m - self.real) / 2.0).sqrt() } else { ((m - self.real) / 2.0).sqrt() };
+        Complex::new(sr, si)
     }
 }
 
@@ -100,6 +121,72 @@ pub enum Value {
     Object(Rc<RefCell<PJObject>>),
     List(Rc<RefCell<Vec<Value>>>),
     Map(Rc<RefCell<rustc_hash::FxHashMap<String, Value>>>),
+    Task(Rc<RefCell<TaskState>>),
+    /// An enum constant, e.g. `Color.RED`. Holds (enum type name, variant name).
+    Enum(String, String),
+}
+
+// ============================================================
+// ASYNC TASKS
+// ============================================================
+//
+// PayJar's interpreter is a single-threaded tree walker whose values
+// (Rc<RefCell<..>>) are not `Send`, so true OS-thread concurrency isn't
+// available. Instead, `async func` calls are lazy: calling one doesn't run
+// the body — it captures the call and returns a `Task` handle immediately.
+// The body only actually runs the first time the task is `await`ed (or
+// never, if it's never awaited), and the result is cached so awaiting the
+// same task again just returns the cached value instead of re-running it.
+#[derive(Debug, Clone)]
+pub enum TaskState {
+    Pending {
+        func: AstNode,
+        args: Vec<Value>,
+        self_obj: Option<Rc<RefCell<PJObject>>>,
+    },
+    Ready(Value),
+}
+
+/// Build a not-yet-run Task value for a call to an `async func`.
+/// Java-style visibility check: is the code currently executing (identified
+/// by its `self_obj`, i.e. which object's method is running, if any) allowed
+/// to reach a `private` member of `target_class`? True if we're running
+/// inside a method of that same class (any instance, not just the same
+/// object — matching how `private` works between instances in Java).
+fn same_class(self_obj: &Option<Rc<RefCell<PJObject>>>, target_class: &str) -> bool {
+    self_obj.as_ref().map(|so| so.borrow().class_name == target_class).unwrap_or(false)
+}
+
+pub fn make_pending_task(func: AstNode, args: Vec<Value>, self_obj: Option<Rc<RefCell<PJObject>>>) -> Value {
+    Value::Task(Rc::new(RefCell::new(TaskState::Pending { func, args, self_obj })))
+}
+
+/// `await` semantics: running a pending task's body (once, caching the
+/// result) and returning its value. Awaiting a plain (non-task) value is
+/// simply the identity function, matching how `await` behaves on
+/// already-resolved values in most languages.
+pub fn resolve_task(env: &mut Env, v: Value) -> Value {
+    let task_rc = match v {
+        Value::Task(ref t) => Rc::clone(t),
+        _ => return v,
+    };
+
+    if let TaskState::Ready(ref ready) = *task_rc.borrow() {
+        return ready.clone();
+    }
+
+    // Take the pending call out of the task before running it, so the
+    // borrow doesn't stay held (and re-entrant/self-referential awaits on
+    // this exact task can't deadlock on the RefCell).
+    let taken = std::mem::replace(&mut *task_rc.borrow_mut(), TaskState::Ready(Value::Null));
+    let (func, args, self_obj) = match taken {
+        TaskState::Pending { func, args, self_obj } => (func, args, self_obj),
+        TaskState::Ready(ready) => { *task_rc.borrow_mut() = TaskState::Ready(ready.clone()); return ready; }
+    };
+
+    let result = call_func_with_vals(env, &func, args, self_obj);
+    *task_rc.borrow_mut() = TaskState::Ready(result.clone());
+    result
 }
 
 impl Value {
@@ -144,7 +231,14 @@ impl Value {
             Value::Float(f)  => *f != 0.0,
             Value::Str(s)    => !s.is_empty(),
             Value::Comp(c)   => c.real!=0.0||c.imag!=0.0,
-            _ => false,
+            // Bugfix: objects/lists/maps/tasks used to fall through to the
+            // wildcard below and were always falsy, so `if (someObject)` or
+            // `if (someList)` could never be true even for non-empty values.
+            Value::Object(_) => true,
+            Value::List(_)   => true,
+            Value::Map(_)    => true,
+            Value::Task(_)   => true,
+            Value::Enum(_, _) => true,
         }
     }
     pub fn to_string_repr(&self) -> String {
@@ -156,6 +250,12 @@ impl Value {
             }
             Value::Str(s)    => s.clone(),
             Value::Null      => "Null".to_string(),
+            // Bugfix: Comp had no arm here and silently fell through to the
+            // wildcard as an empty string, so printing/toStr()-ing a complex
+            // number produced nothing at all.
+            Value::Comp(c)   => c.to_display(),
+            Value::Task(_)   => "<task>".to_string(),
+            Value::Enum(enum_name, variant) => format!("{}.{}", enum_name, variant),
             Value::Object(o) => format!("<{} object>", o.borrow().class_name),
             Value::List(l)   => {
                 let items: Vec<String> = l.borrow().iter().map(|v| {
@@ -172,7 +272,6 @@ impl Value {
                 pairs.sort();
                 format!("{{{}}}", pairs.join(", "))
             }
-            _ => "".to_string(),
         }
     }
     pub fn print(&self) {
@@ -184,6 +283,10 @@ impl Value {
             }
             Value::Str(s)    => print!("{}", s),
             Value::Null      => print!("null"),
+            // Bugfix: Comp fell through to the wildcard and printed nothing.
+            Value::Comp(c)   => print!("{}", c.to_display()),
+            Value::Task(_)   => print!("<task>"),
+            Value::Enum(enum_name, variant) => print!("{}.{}", enum_name, variant),
             Value::Object(o) => print!("<{} object>", o.borrow().class_name),
             Value::List(l)   => {
                 print!("[");
@@ -202,7 +305,6 @@ impl Value {
                 pairs.sort();
                 print!("{{{}}}", pairs.join(", "));
             }
-            _ => {}
         }
     }
     pub fn perror(&self) {
@@ -214,6 +316,10 @@ impl Value {
             }
             Value::Str(s)    => eprint!("{}", s),
             Value::Null      => eprint!("null"),
+            // Bugfix: Comp fell through to the wildcard and printed nothing.
+            Value::Comp(c)   => eprint!("{}", c.to_display()),
+            Value::Task(_)   => eprint!("<task>"),
+            Value::Enum(enum_name, variant) => eprint!("{}.{}", enum_name, variant),
             Value::Object(o) => eprint!("<{} object>", o.borrow().class_name),
             Value::List(l)   => {
                 eprint!("[");
@@ -232,7 +338,6 @@ impl Value {
                 pairs.sort();
                 eprint!("{{{}}}", pairs.join(", "));
             }
-            _ => {}
         }
     }
 }
@@ -246,6 +351,7 @@ pub struct PJField {
     pub name: String,
     pub val: Value,
     pub is_const: bool,
+    pub is_private: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -289,8 +395,17 @@ impl Scope {
     }
     pub fn set_declare(scope: &Rc<RefCell<Scope>>, name: &str, val: Value, is_const: bool) {
         let mut s = scope.borrow_mut();
-        if s.vars.contains_key(name) {
-            eprintln!("Runtime Error: Redeclaration of '{}'", name); process::exit(1);
+        // Bugfix: redeclaring a variable in the same scope used to be a
+        // fatal error that killed the whole process. That's especially bad
+        // in the interactive CLI, where re-running a `let` line (extremely
+        // common when experimenting) would silently end the entire session
+        // and lose every variable saved so far. A const can't be
+        // re-bound, but an ordinary variable is now simply updated in place.
+        if let Some(existing) = s.vars.get(name) {
+            if existing.is_const {
+                eprintln!("Runtime Error: Cannot redeclare const '{}'", name);
+                return;
+            }
         }
         s.vars.insert(name.to_string(), VarEntry { val, is_const });
     }
@@ -301,7 +416,8 @@ impl Scope {
                 let mut s = cur.borrow_mut();
                 if let Some(entry) = s.vars.get_mut(name) {
                     if entry.is_const {
-                        eprintln!("Runtime Error: Cannot assign to const '{}'", name); process::exit(1);
+                        eprintln!("Runtime Error: Cannot assign to const '{}'", name);
+                        return;
                     }
                     entry.val = val;
                     return;
@@ -311,8 +427,10 @@ impl Scope {
             match parent {
                 Some(p) => cur = p,
                 None => {
+                    // Bugfix: this used to process::exit(1), which meant a
+                    // single typo anywhere would kill the whole CLI session.
                     eprintln!("Runtime Error: Assignment to undefined variable '{}'", name);
-                    process::exit(1);
+                    return;
                 }
             }
         }
@@ -328,7 +446,9 @@ impl Scope {
             match parent {
                 Some(p) => cur = p,
                 None => {
-                    eprintln!("Runtime Error: Undefined variable '{}'", name); process::exit(1);
+                    // Bugfix: this used to process::exit(1); see set_assign above.
+                    eprintln!("Runtime Error: Undefined variable '{}'", name);
+                    return Value::Null;
                 }
             }
         }
@@ -342,18 +462,79 @@ impl Scope {
 pub struct Env {
     pub funcs: HashMap<String, AstNode>,
     pub classes: HashMap<String, AstNode>,
+    /// Enum type name -> ordered list of variant names.
+    pub enums: HashMap<String, Vec<String>>,
     pub scope: Rc<RefCell<Scope>>,
 }
 
 impl Env {
     pub fn new() -> Self {
+        install_quiet_panic_hook();
         let mut env = Env {
             funcs: HashMap::new(),
             classes: HashMap::new(),
+            enums: HashMap::new(),
             scope: Scope::new(None),
         };
         register_builtin_modules(&mut env);
         env
+    }
+}
+
+// ============================================================
+// CATCHABLE RUNTIME ERRORS
+// ============================================================
+//
+// `try { } except (e) { }` is implemented on top of Rust's own unwinding:
+// a runtime error calls `runtime_error(...)`, which panics carrying the
+// message as its payload. A `Try` node runs its body inside
+// `std::panic::catch_unwind`; if nothing panicked, control continues
+// normally, and if something did, the message is bound to the `except`
+// variable and the except block runs instead. Nothing escapes the
+// process anymore except an error that reaches the top of the whole
+// program with no enclosing `try` -- at that point `run_catching` (see
+// the RUN section) catches it once more, prints it exactly like the old
+// eprintln!+exit did, and exits with status 1, so scripts with no
+// try/except at all behave exactly as before.
+//
+// This relies on unwinding actually happening, so the release profile's
+// `panic = "abort"` (see Cargo.toml) must not be used -- see the comment
+// there.
+
+static PANIC_HOOK_INIT: std::sync::Once = std::sync::Once::new();
+
+/// Rust's default panic hook prints a "thread panicked at ..." + backtrace
+/// notice to stderr for every panic, including ones we're about to catch
+/// and handle ourselves via `try`/`except`. That default output would be
+/// confusing noise for a caught, handled error, so it's replaced once (per
+/// process) with a no-op hook. Uncaught errors are still printed -- just by
+/// us, in our own "Runtime Error: ..." style, at the point they're caught
+/// at the top level (see `run_catching`).
+fn install_quiet_panic_hook() {
+    PANIC_HOOK_INIT.call_once(|| {
+        std::panic::set_hook(Box::new(|_info| {}));
+    });
+}
+
+/// Raises a catchable runtime error: unwinds up to the nearest enclosing
+/// `try` block (or, if there is none, all the way out of the program).
+/// This replaces the old pattern of `eprintln!(...); process::exit(1);`,
+/// which killed the whole process immediately and could never be caught.
+pub fn runtime_error(msg: String) -> ! {
+    panic!("{}", msg);
+}
+
+/// Recovers the `String` passed to `runtime_error` out of a caught panic's
+/// payload. Falls back to a generic message for panics that didn't
+/// originate from `runtime_error` (e.g. a genuine interpreter bug), so
+/// `except` still gets *something* sensible to work with either way.
+fn panic_payload_to_string(payload: Box<dyn std::any::Any + Send>) -> String {
+    if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else if let Some(s) = payload.downcast_ref::<&str>() {
+        s.to_string()
+    } else {
+        "Runtime Error: an unknown internal error occurred".to_string()
     }
 }
 
@@ -367,8 +548,22 @@ fn create_builtin_module(name: &str) -> Rc<RefCell<PJObject>> {
     }))
 }
 
+/// Every builtin module name recognized as a bare identifier (e.g. `math`,
+/// `cmath.sqrt(...)`) and as a valid target of `import`. Kept as a single
+/// list so the three places that need to agree on it (module registration,
+/// and the two import-whitelist checks below) can't drift apart the way
+/// they had: `cmath`, `json`, `os`, `sys`, `time`, `base64`, and `hash` were
+/// all dispatchable in eval_builtin_module_method but never registered as
+/// accessible identifiers here, so e.g. `cmath.sqrt(...)` or `time.now()`
+/// always failed with "Undefined variable" before ever reaching the
+/// dispatch logic -- those modules were completely unreachable.
+const BUILTIN_MODULE_NAMES: &[&str] = &[
+    "math", "cmath", "io", "sqlite3", "sqllite3", "random", "regex", "gui",
+    "net", "os","system", "time", "json", "base64", "hash",
+];
+
 fn register_builtin_modules(env: &mut Env) {
-    for name in &["math", "io", "sqlite3", "sqllite3", "random", "regex", "gui", "net"] {
+    for name in BUILTIN_MODULE_NAMES {
         let obj = create_builtin_module(name);
         Scope::set_declare(&env.scope, name, Value::Object(obj), false);
     }
@@ -408,9 +603,8 @@ pub fn call_func_with_vals(
 
     let expected = func_def.params.len() - param_offset;
     if expected != arg_vals.len() {
-        eprintln!("Runtime Error: Function '{}' expected {} args but got {}",
-            func_def.name.as_deref().unwrap_or("?"), expected, arg_vals.len());
-        process::exit(1);
+        runtime_error(format!("Runtime Error: Function '{}' expected {} args but got {}",
+            func_def.name.as_deref().unwrap_or("?"), expected, arg_vals.len()));
     }
     for (i, v) in arg_vals.into_iter().enumerate() {
         Scope::set_declare(&env.scope, &func_def.params[i + param_offset], v, false);
@@ -422,13 +616,91 @@ pub fn call_func_with_vals(
         match visit_stmt(env, stmt, self_obj.clone()) {
             Signal::Return(v) => { ret = v; break; }
             Signal::Break | Signal::Continue => {
-                eprintln!("Runtime Error: 'break'/'continue' used outside of a loop"); process::exit(1);
+                runtime_error(format!("Runtime Error: 'break'/'continue' used outside of a loop"));
             }
             Signal::None => {}
         }
     }
     env.scope = saved_scope;
     ret
+}
+
+/// Runs a `Try` node's `body`, catching any `runtime_error`/`throw` that
+/// escapes it (from anywhere in its dynamic extent -- a builtin, a nested
+/// call, a deeply-nested method -- not just its own top-level statements)
+/// and routing it to the `except` block instead of letting it kill the
+/// process. `finally`, if present, always runs last, whether the try body
+/// finished normally, threw, or itself contained a `return`/`break`/
+/// `continue` -- and a control-flow signal out of `finally` itself takes
+/// priority over whatever the try/except part produced, matching how
+/// finally works in Java/JS/Python.
+fn visit_try(env: &mut Env, node: &AstNode, self_obj: Option<Rc<RefCell<PJObject>>>) -> Signal {
+    let outer_scope = Rc::clone(&env.scope);
+
+    env.scope = Scope::new(Some(Rc::clone(&outer_scope)));
+    let try_body = &node.body;
+    let try_result = {
+        let payload = std::panic::AssertUnwindSafe((&mut *env, self_obj.clone(), try_body));
+        std::panic::catch_unwind(move || {
+            // Forces the closure to capture `payload` as a single unit
+            // instead of each tuple field individually -- with the latter,
+            // rustc's precise-capture analysis would see straight through
+            // the AssertUnwindSafe wrapper to the non-UnwindSafe fields
+            // inside it and refuse to compile.
+            let payload = payload;
+            let std::panic::AssertUnwindSafe((env, so, body)) = payload;
+            let mut sig = Signal::None;
+            for stmt in body {
+                match visit_stmt(env, stmt, so.clone()) {
+                    Signal::None => {}
+                    s => { sig = s; break; }
+                }
+            }
+            sig
+        })
+    };
+    // Whatever happened inside -- clean finish, a Return/Break/Continue, or
+    // a panic that unwound through several nested calls whose own scope
+    // restores never got to run -- the try block's scope is done with now,
+    // so it's reset directly to what it was before entering `try`.
+    env.scope = Rc::clone(&outer_scope);
+
+    let outcome = match try_result {
+        Ok(sig) => sig,
+        Err(payload) => {
+            let msg = panic_payload_to_string(payload);
+            env.scope = Scope::new(Some(Rc::clone(&outer_scope)));
+            if let Some(var_name) = node.name.as_deref() {
+                Scope::set_declare(&env.scope, var_name, Value::Str(msg), false);
+            }
+            let mut sig = Signal::None;
+            for stmt in &node.else_body {
+                match visit_stmt(env, stmt, self_obj.clone()) {
+                    Signal::None => {}
+                    s => { sig = s; break; }
+                }
+            }
+            env.scope = Rc::clone(&outer_scope);
+            sig
+        }
+    };
+
+    if !node.finally_body.is_empty() {
+        env.scope = Scope::new(Some(Rc::clone(&outer_scope)));
+        let mut finally_sig = Signal::None;
+        for stmt in &node.finally_body {
+            match visit_stmt(env, stmt, self_obj.clone()) {
+                Signal::None => {}
+                s => { finally_sig = s; break; }
+            }
+        }
+        env.scope = Rc::clone(&outer_scope);
+        if !matches!(finally_sig, Signal::None) {
+            return finally_sig;
+        }
+    }
+
+    outcome
 }
 
 // ============================================================
@@ -468,6 +740,15 @@ fn visit_stmt(env: &mut Env, node: &AstNode, self_obj: Option<Rc<RefCell<PJObjec
         NodeType::ClassDef => {
             env.classes.insert(node.name.clone().unwrap(), node.clone());
             Signal::None
+        }
+        NodeType::EnumDef => {
+            env.enums.insert(node.name.clone().unwrap(), node.params.clone());
+            Signal::None
+        }
+        NodeType::Try => visit_try(env, node, self_obj),
+        NodeType::Throw => {
+            let v = eval(env, node.expr.as_ref().unwrap(), self_obj);
+            runtime_error(v.to_string_repr())
         }
         NodeType::If => {
             let cond = eval(env, node.expr.as_ref().unwrap(), self_obj.clone());
@@ -527,7 +808,7 @@ fn visit_stmt(env: &mut Env, node: &AstNode, self_obj: Option<Rc<RefCell<PJObjec
                 let iter = eval(env, node.object.as_ref().unwrap(), self_obj.clone());
                 let items = match iter {
                     Value::List(ref l) => l.borrow().clone(),
-                    _ => { eprintln!("Runtime Error: for-in requires a list"); process::exit(1); }
+                    _ => { runtime_error(format!("Runtime Error: for-in requires a list")); }
                 };
                 'for_in: for item in items {
                     let saved = Rc::clone(&env.scope);
@@ -580,19 +861,41 @@ fn visit_stmt(env: &mut Env, node: &AstNode, self_obj: Option<Rc<RefCell<PJObjec
         NodeType::MemberAssign => {
             let obj_val = eval(env, node.object.as_ref().unwrap(), self_obj.clone());
             if let Value::Object(ref obj_rc) = obj_val {
+                let caller = self_obj.clone();
                 let new_val = eval(env, node.expr.as_ref().unwrap(), self_obj);
                 let name = node.name.as_deref().unwrap();
+
+                // Check visibility/existence with a short-lived immutable
+                // borrow first, and let it fully drop before taking the
+                // mutable borrow below -- `obj_rc` and `caller` can be the
+                // very same object (e.g. inside `self.field = ...`), and
+                // same_class() also needs to borrow it, so overlapping the
+                // two would panic with "already mutably borrowed".
+                let (class_name, is_private_field, field_exists) = {
+                    let obj = obj_rc.borrow();
+                    let class_name = obj.class_name.clone();
+                    match obj.find_field(name) {
+                        Some(f) => (class_name, f.is_private, true),
+                        None => (class_name, false, false),
+                    }
+                };
+                if !field_exists {
+                    runtime_error(format!("Runtime Error: Field '{}' not found on '{}'", name, class_name));
+                }
+                if is_private_field && !same_class(&caller, &class_name) {
+                    runtime_error(format!("Runtime Error: Field '{}' is private on '{}' and cannot be assigned from here",
+                        name, class_name));
+                }
+
                 let mut obj = obj_rc.borrow_mut();
                 if let Some(f) = obj.find_field_mut(name) {
                     if f.is_const {
-                        eprintln!("Runtime Error: Cannot assign to const field '{}'", name); process::exit(1);
+                        runtime_error(format!("Runtime Error: Cannot assign to const field '{}'", name));
                     }
                     f.val = new_val;
-                } else {
-                    eprintln!("Runtime Error: Field '{}' not found on '{}'", name, obj.class_name); process::exit(1);
                 }
             } else {
-                eprintln!("Runtime Error: Member assignment on non-object"); process::exit(1);
+                runtime_error(format!("Runtime Error: Member assignment on non-object"));
             }
             Signal::None
         }
@@ -604,14 +907,14 @@ fn visit_stmt(env: &mut Env, node: &AstNode, self_obj: Option<Rc<RefCell<PJObjec
                 Value::List(ref l) => {
                     let mut items = l.borrow_mut();
                     let i = idx.as_int() as usize;
-                    if i >= items.len() { eprintln!("Runtime Error: List index out of range"); process::exit(1); }
+                    if i >= items.len() { runtime_error(format!("Runtime Error: List index out of range")); }
                     items[i] = newval;
                 }
                 Value::Map(ref m) => {
                     let key = idx.to_string_repr();
                     m.borrow_mut().insert(key, newval);
                 }
-                _ => { eprintln!("Runtime Error: Cannot index-assign on non-list/map"); process::exit(1); }
+                _ => { runtime_error(format!("Runtime Error: Cannot index-assign on non-list/map")); }
             }
             Signal::None
         }
@@ -631,6 +934,7 @@ pub fn eval(env: &mut Env, node: &AstNode, self_obj: Option<Rc<RefCell<PJObject>
     match node.typ {
         NodeType::Int   => Value::Int(node.int_val),
         NodeType::Float => Value::Float(node.fval),
+        NodeType::Imaginary => Value::Comp(Complex::new(0.0, node.fval)),
         NodeType::Str   => Value::Str(node.str_val.clone().unwrap_or_default()),
 
         NodeType::TemplateStr => {
@@ -647,6 +951,11 @@ pub fn eval(env: &mut Env, node: &AstNode, self_obj: Option<Rc<RefCell<PJObject>
                 if let Some(ref obj) = self_obj { return Value::Object(Rc::clone(obj)); }
             }
             Scope::get(&env.scope, name)
+        }
+
+        NodeType::Await => {
+            let v = eval(env, node.left.as_ref().unwrap(), self_obj);
+            resolve_task(env, v)
         }
 
         NodeType::Readln => {
@@ -687,7 +996,7 @@ pub fn eval(env: &mut Env, node: &AstNode, self_obj: Option<Rc<RefCell<PJObject>
                     let mut i = idx.as_int();
                     if i < 0 { i = items.len() as i64 + i; }
                     if i < 0 || i >= items.len() as i64 {
-                        eprintln!("Runtime Error: List index {} out of range", i); process::exit(1);
+                        runtime_error(format!("Runtime Error: List index {} out of range", i));
                     }
                     items[i as usize].clone()
                 }
@@ -696,17 +1005,17 @@ pub fn eval(env: &mut Env, node: &AstNode, self_obj: Option<Rc<RefCell<PJObject>
                     let mut i = idx.as_int();
                     if i < 0 { i = chars.len() as i64 + i; }
                     if i < 0 || i >= chars.len() as i64 {
-                        eprintln!("Runtime Error: String index out of range"); process::exit(1);
+                        runtime_error(format!("Runtime Error: String index out of range"));
                     }
                     Value::Str(chars[i as usize].to_string())
                 }
                 Value::Map(ref m) => {
                     let key = idx.to_string_repr();
                     m.borrow().get(&key).cloned().unwrap_or_else(|| {
-                        eprintln!("Runtime Error: Map key '{}' not found", key); process::exit(1);
+                        runtime_error(format!("Runtime Error: Map key '{}' not found", key));
                     })
                 }
-                _ => { eprintln!("Runtime Error: Cannot index into that type"); process::exit(1); }
+                _ => { runtime_error(format!("Runtime Error: Cannot index into that type")); }
             }
         }
 
@@ -714,9 +1023,14 @@ pub fn eval(env: &mut Env, node: &AstNode, self_obj: Option<Rc<RefCell<PJObject>
             let lv = eval(env, node.left.as_ref().unwrap(), self_obj.clone());
             let rv = eval(env, node.right.as_ref().unwrap(), self_obj);
             let op = node.str_val.as_deref().unwrap();
+            let is_comp = matches!(lv, Value::Comp(_)) || matches!(rv, Value::Comp(_));
             if op == "+" {
                 if matches!(lv, Value::Str(_)) || matches!(rv, Value::Str(_)) {
                     return Value::Str(format!("{}{}", lv.to_string_repr(), rv.to_string_repr()));
+                }
+                if is_comp {
+                    let (l, r) = (lv.as_complex(), rv.as_complex());
+                    return Value::Comp(Complex::new(l.real + r.real, l.imag + r.imag));
                 }
                 if matches!(lv, Value::Float(_)) || matches!(rv, Value::Float(_)) {
                     return Value::Float(lv.as_float() + rv.as_float());
@@ -729,6 +1043,10 @@ pub fn eval(env: &mut Env, node: &AstNode, self_obj: Option<Rc<RefCell<PJObject>
             }
             match op {
                 "-" => {
+                    if is_comp {
+                        let (l, r) = (lv.as_complex(), rv.as_complex());
+                        return Value::Comp(Complex::new(l.real - r.real, l.imag - r.imag));
+                    }
                     if matches!(lv, Value::Float(_)) || matches!(rv, Value::Float(_)) {
                         return Value::Float(lv.as_float() - rv.as_float());
                     }
@@ -739,6 +1057,13 @@ pub fn eval(env: &mut Env, node: &AstNode, self_obj: Option<Rc<RefCell<PJObject>
                     }
                 }
                 "*" => {
+                    if is_comp {
+                        let (l, r) = (lv.as_complex(), rv.as_complex());
+                        return Value::Comp(Complex::new(
+                            l.real * r.real - l.imag * r.imag,
+                            l.real * r.imag + l.imag * r.real,
+                        ));
+                    }
                     if matches!(lv, Value::Float(_)) || matches!(rv, Value::Float(_)) {
                         return Value::Float(lv.as_float() * rv.as_float());
                     }
@@ -749,35 +1074,81 @@ pub fn eval(env: &mut Env, node: &AstNode, self_obj: Option<Rc<RefCell<PJObject>
                     }
                 }
                 "/" => {
-                    if rv.as_float() == 0.0 { eprintln!("Runtime Error: Division by zero"); process::exit(1); }
+                    if is_comp {
+                        let (l, r) = (lv.as_complex(), rv.as_complex());
+                        let denom = r.real * r.real + r.imag * r.imag;
+                        if denom == 0.0 { runtime_error(format!("Runtime Error: Division by zero")); }
+                        return Value::Comp(Complex::new(
+                            (l.real * r.real + l.imag * r.imag) / denom,
+                            (l.imag * r.real - l.real * r.imag) / denom,
+                        ));
+                    }
+                    if rv.as_float() == 0.0 { runtime_error(format!("Runtime Error: Division by zero")); }
                     Value::Float(lv.as_float() / rv.as_float())
                 }
                 "%" => {
-                    if rv.as_int() == 0 { eprintln!("Runtime Error: Modulo by zero"); process::exit(1); }
+                    if rv.as_int() == 0 { runtime_error(format!("Runtime Error: Modulo by zero")); }
                     Value::Int(lv.as_int() % rv.as_int())
                 }
+                // Bugfix: these used to always compare via as_int() (even
+                // for two Floats), so e.g. `3.9 > 3.1` silently truncated
+                // both sides to `3` first and evaluated to false. Now
+                // Floats compare as floats, and Complex numbers -- which
+                // have no natural total order -- support == / != but give
+                // a clear error on </>/<=/>= instead of a meaningless
+                // real-part-only comparison.
                 "==" => {
                     if let (Value::Str(ls), Value::Str(rs)) = (&lv, &rv) {
                         Value::Int(if ls == rs { 1 } else { 0 })
+                    } else if let (Value::Enum(lt, lvar), Value::Enum(rt, rvar)) = (&lv, &rv) {
+                        Value::Int(if lt == rt && lvar == rvar { 1 } else { 0 })
+                    } else if is_comp {
+                        let (l, r) = (lv.as_complex(), rv.as_complex());
+                        Value::Int(if l.real == r.real && l.imag == r.imag { 1 } else { 0 })
+                    } else if matches!(lv, Value::Float(_)) || matches!(rv, Value::Float(_)) {
+                        Value::Int(if lv.as_float() == rv.as_float() { 1 } else { 0 })
                     } else { Value::Int(if lv.as_int() == rv.as_int() { 1 } else { 0 }) }
                 }
                 "!=" => {
                     if let (Value::Str(ls), Value::Str(rs)) = (&lv, &rv) {
                         Value::Int(if ls != rs { 1 } else { 0 })
+                    } else if let (Value::Enum(lt, lvar), Value::Enum(rt, rvar)) = (&lv, &rv) {
+                        Value::Int(if lt != rt || lvar != rvar { 1 } else { 0 })
+                    } else if is_comp {
+                        let (l, r) = (lv.as_complex(), rv.as_complex());
+                        Value::Int(if l.real != r.real || l.imag != r.imag { 1 } else { 0 })
+                    } else if matches!(lv, Value::Float(_)) || matches!(rv, Value::Float(_)) {
+                        Value::Int(if lv.as_float() != rv.as_float() { 1 } else { 0 })
                     } else { Value::Int(if lv.as_int() != rv.as_int() { 1 } else { 0 }) }
                 }
-                "<"  => Value::Int(if lv.as_int() <  rv.as_int() { 1 } else { 0 }),
-                ">"  => Value::Int(if lv.as_int() >  rv.as_int() { 1 } else { 0 }),
-                "<=" => Value::Int(if lv.as_int() <= rv.as_int() { 1 } else { 0 }),
-                ">=" => Value::Int(if lv.as_int() >= rv.as_int() { 1 } else { 0 }),
-                _    => { eprintln!("Runtime Error: Unknown operator '{}'", op); process::exit(1); }
+                "<" | ">" | "<=" | ">=" => {
+                    if is_comp {
+                        runtime_error(format!("Runtime Error: '{}' is not supported between complex numbers (no natural ordering)", op));
+                    }
+                    let (l, r) = if matches!(lv, Value::Float(_)) || matches!(rv, Value::Float(_)) {
+                        (lv.as_float(), rv.as_float())
+                    } else {
+                        (lv.as_int() as f64, rv.as_int() as f64)
+                    };
+                    let b = match op { "<" => l < r, ">" => l > r, "<=" => l <= r, _ => l >= r };
+                    Value::Int(if b { 1 } else { 0 })
+                }
+                _    => { runtime_error(format!("Runtime Error: Unknown operator '{}'", op)); }
             }
         }
 
         NodeType::UnaryOp => {
             let v = eval(env, node.left.as_ref().unwrap(), self_obj);
             match node.str_val.as_deref().unwrap() {
-                "-"       => Value::Int(-v.as_int()),
+                // Bugfix: this used to always do Value::Int(-v.as_int()),
+                // so negating a Float truncated it to an integer first --
+                // e.g. -3.5 evaluated to the Int -3 instead of the Float
+                // -3.5. Now negation preserves the operand's type.
+                "-" => match &v {
+                    Value::Float(f) => Value::Float(-f),
+                    Value::Comp(c)  => Value::Comp(Complex::new(-c.real, -c.imag)),
+                    _ => Value::Int(-v.as_int()),
+                },
                 "not"|"!" => Value::Int(if !v.truthy() { 1 } else { 0 }),
                 _ => v,
             }
@@ -800,7 +1171,7 @@ pub fn eval(env: &mut Env, node: &AstNode, self_obj: Option<Rc<RefCell<PJObject>
                         Value::Int(if rv.truthy() { 1 } else { 0 })
                     }
                 }
-                _ => { eprintln!("Runtime Error: Unknown logical op"); process::exit(1); }
+                _ => { runtime_error(format!("Runtime Error: Unknown logical op")); }
             }
         }
 
@@ -815,11 +1186,11 @@ pub fn eval(env: &mut Env, node: &AstNode, self_obj: Option<Rc<RefCell<PJObject>
         NodeType::ObjectCreation => {
             let class_name = node.name.as_deref().unwrap();
             let cls = env.classes.get(class_name).cloned().unwrap_or_else(|| {
-                eprintln!("Runtime Error: Undefined class '{}'", class_name); process::exit(1);
+                runtime_error(format!("Runtime Error: Undefined class '{}'", class_name));
             });
             let fields: Vec<PJField> = cls.fields.iter().map(|fd| {
                 let fv = if let Some(ref e) = fd.expr { eval(env, e, None) } else { Value::Null };
-                PJField { name: fd.name.clone().unwrap(), val: fv, is_const: fd.is_const() }
+                PJField { name: fd.name.clone().unwrap(), val: fv, is_const: fd.is_const(), is_private: fd.is_private() }
             }).collect();
             let obj = Rc::new(RefCell::new(PJObject {
                 class_name: class_name.to_string(),
@@ -830,18 +1201,48 @@ pub fn eval(env: &mut Env, node: &AstNode, self_obj: Option<Rc<RefCell<PJObject>
                 .map(|a| eval(env, a, self_obj.clone()))
                 .collect();
             if let Some(ref ctor) = cls.constructor {
+                if ctor.is_private() && !same_class(&self_obj, class_name) {
+                    runtime_error(format!("Runtime Error: constructor of '{}' is private and cannot be called from here", class_name));
+                }
                 call_func_with_vals(env, ctor, arg_vals, Some(Rc::clone(&obj)));
             } else if !node.args.is_empty() {
-                eprintln!("Runtime Error: Class '{}' has no constructor but got args", class_name);
-                process::exit(1);
+                runtime_error(format!("Runtime Error: Class '{}' has no constructor but got args", class_name));
             }
             Value::Object(obj)
         }
 
         NodeType::MemberAccess => {
+            // `EnumName.VARIANT` -- checked *before* evaluating `node.object`
+            // as an ordinary expression, since an enum type name (e.g.
+            // `Color`) isn't a variable and evaluating it as one would just
+            // fail with "Undefined variable".
+            if let NodeType::VarAccess = node.object.as_ref().unwrap().typ {
+                let obj_name = node.object.as_ref().unwrap().name.as_deref().unwrap();
+                if let Some(variants) = env.enums.get(obj_name).cloned() {
+                    let member_name = node.name.as_deref().unwrap();
+                    if !variants.iter().any(|v| v == member_name) {
+                        runtime_error(format!(
+                            "Runtime Error: enum '{}' has no variant '{}'", obj_name, member_name));
+                    }
+                    return Value::Enum(obj_name.to_string(), member_name.to_string());
+                }
+            }
+
             let obj_val = eval(env, node.object.as_ref().unwrap(), self_obj.clone());
             let member_name = node.name.as_deref().unwrap();
             match obj_val {
+                // Java-style enum convenience methods: `Color.RED.name()` and
+                // `Color.RED.ordinal()`.
+                Value::Enum(ref enum_name, ref variant) => match member_name {
+                    "name" => Value::Str(variant.clone()),
+                    "ordinal" => {
+                        let variants = env.enums.get(enum_name).cloned().unwrap_or_default();
+                        let idx = variants.iter().position(|v| v == variant).unwrap_or(0);
+                        Value::Int(idx as i64)
+                    }
+                    _ => runtime_error(format!(
+                        "Runtime Error: enum '{}' has no member '{}'", enum_name, member_name)),
+                },
                 Value::List(ref l) => {
                     if node.is_call() {
                         let avals: Vec<Value> = node.args.iter()
@@ -849,18 +1250,18 @@ pub fn eval(env: &mut Env, node: &AstNode, self_obj: Option<Rc<RefCell<PJObject>
                             .collect();
                         match member_name {
                             "append" => {
-                                if avals.len() != 1 { eprintln!("append() takes 1 arg"); process::exit(1); }
+                                if avals.len() != 1 { runtime_error(format!("append() takes 1 arg")); }
                                 l.borrow_mut().push(avals.into_iter().next().unwrap());
                                 Value::Null
                             }
                             "pop" => {
                                 let mut items = l.borrow_mut();
-                                if items.is_empty() { eprintln!("Runtime Error: pop from empty list"); process::exit(1); }
+                                if items.is_empty() { runtime_error(format!("Runtime Error: pop from empty list")); }
                                 let idx = if !avals.is_empty() { avals[0].as_int() as usize } else { items.len() - 1 };
                                 items.remove(idx)
                             }
                             "remove" => {
-                                if avals.len() != 1 { eprintln!("remove() takes 1 arg"); process::exit(1); }
+                                if avals.len() != 1 { runtime_error(format!("remove() takes 1 arg")); }
                                 let mut items = l.borrow_mut();
                                 let pos = items.iter().position(|v| match (v, &avals[0]) {
                                     (Value::Str(a), Value::Str(b)) => a == b,
@@ -868,24 +1269,24 @@ pub fn eval(env: &mut Env, node: &AstNode, self_obj: Option<Rc<RefCell<PJObject>
                                 });
                                 match pos {
                                     Some(i) => { items.remove(i); Value::Null }
-                                    None => { eprintln!("Runtime Error: remove: value not in list"); process::exit(1); }
+                                    None => { runtime_error(format!("Runtime Error: remove: value not in list")); }
                                 }
                             }
                             "len" | "length" => Value::Int(l.borrow().len() as i64),
                             "contains" => {
-                                if avals.len() != 1 { eprintln!("contains() takes 1 arg"); process::exit(1); }
+                                if avals.len() != 1 { runtime_error(format!("contains() takes 1 arg")); }
                                 let found = l.borrow().iter().any(|v| match (v, &avals[0]) {
                                     (Value::Str(a), Value::Str(b)) => a == b,
                                     (a, b) => a.as_int() == b.as_int(),
                                 });
                                 Value::Int(if found { 1 } else { 0 })
                             }
-                            _ => { eprintln!("Runtime Error: List has no method '{}'", member_name); process::exit(1); }
+                            _ => { runtime_error(format!("Runtime Error: List has no method '{}'", member_name)); }
                         }
                     } else {
                         match member_name {
                             "len" | "length" => Value::Int(l.borrow().len() as i64),
-                            _ => { eprintln!("Runtime Error: List has no field '{}'", member_name); process::exit(1); }
+                            _ => { runtime_error(format!("Runtime Error: List has no field '{}'", member_name)); }
                         }
                     }
                 }
@@ -899,23 +1300,37 @@ pub fn eval(env: &mut Env, node: &AstNode, self_obj: Option<Rc<RefCell<PJObject>
                         }
                         let method = { let obj = obj_rc.borrow(); obj.find_method(member_name).cloned() };
                         let method = method.unwrap_or_else(|| {
-                            eprintln!("Runtime Error: Method '{}' not found on '{}'",
-                                member_name, obj_rc.borrow().class_name);
-                            process::exit(1);
+                            runtime_error(format!("Runtime Error: Method '{}' not found on '{}'",
+                                member_name, obj_rc.borrow().class_name));
                         });
+                        if method.is_private() && !same_class(&self_obj, &class_name) {
+                            runtime_error(format!("Runtime Error: Method '{}' is private on '{}' and cannot be called from here",
+                                member_name, class_name));
+                        }
                         let avals: Vec<Value> = node.args.iter()
                             .map(|a| eval(env, a, self_obj.clone()))
                             .collect();
-                        call_func_with_vals(env, &method, avals, Some(Rc::clone(obj_rc)))
+                        if method.is_async() {
+                            make_pending_task(method, avals, Some(Rc::clone(obj_rc)))
+                        } else {
+                            call_func_with_vals(env, &method, avals, Some(Rc::clone(obj_rc)))
+                        }
                     } else {
-                        obj_rc.borrow().find_field(member_name)
-                            .map(|f| f.val.clone())
-                            .unwrap_or_else(|| {
-                                eprintln!("Runtime Error: Field '{}' not found", member_name); process::exit(1);
-                            })
+                        let (field_val, is_private_field, class_name) = {
+                            let obj = obj_rc.borrow();
+                            let field = obj.find_field(member_name).unwrap_or_else(|| {
+                                runtime_error(format!("Runtime Error: Field '{}' not found", member_name));
+                            });
+                            (field.val.clone(), field.is_private, obj.class_name.clone())
+                        };
+                        if is_private_field && !same_class(&self_obj, &class_name) {
+                            runtime_error(format!("Runtime Error: Field '{}' is private on '{}' and cannot be accessed from here",
+                                member_name, class_name));
+                        }
+                        field_val
                     }
                 }
-                _ => { eprintln!("Runtime Error: Member access on non-object/list"); process::exit(1); }
+                _ => { runtime_error(format!("Runtime Error: Member access on non-object/list")); }
             }
         }
 
@@ -956,13 +1371,33 @@ fn run(env: &mut Env, program: &AstNode) {
             env.funcs.insert(stmt.name.clone().unwrap(), stmt.clone());
         } else if stmt.typ == NodeType::ClassDef {
             env.classes.insert(stmt.name.clone().unwrap(), stmt.clone());
+        } else if stmt.typ == NodeType::EnumDef {
+            env.enums.insert(stmt.name.clone().unwrap(), stmt.params.clone());
         }
     }
     for stmt in &program.body {
-        if stmt.typ != NodeType::FuncDef && stmt.typ != NodeType::ClassDef {
+        if stmt.typ != NodeType::FuncDef && stmt.typ != NodeType::ClassDef && stmt.typ != NodeType::EnumDef {
             if let Signal::Return(_) = visit_stmt(env, stmt, None) { break; }
         }
     }
+}
+
+/// Runs `program`, catching any runtime error that escapes every `try` in
+/// the user's own code (i.e. one with no enclosing `try` at all). Returns
+/// `Err(message)` in that case instead of letting the panic take the whole
+/// process down uncontrolled, so callers can decide what "uncaught" should
+/// mean for them: a script run from the command line still exits(1) just
+/// like before `try`/`except` existed (see `interpret_file`), while the
+/// interactive CLI can print the error and simply keep prompting instead of
+/// dying on the first mistyped line (see `interpret_repl`).
+fn run_catching(env: &mut Env, program: &AstNode) -> Result<(), String> {
+    let payload = std::panic::AssertUnwindSafe((&mut *env, program));
+    let result = std::panic::catch_unwind(move || {
+        let payload = payload;
+        let std::panic::AssertUnwindSafe((env, program)) = payload;
+        run(env, program);
+    });
+    result.map_err(panic_payload_to_string)
 }
 
 // ============================================================
@@ -1024,7 +1459,7 @@ fn load_package_file(env: &mut Env, path: &str, debug: bool, target_pkg: &str) {
     let tokens = tokenize(&src);
     // Resolve any builtin imports declared at the top of the package file.
     for (pkg_name, alias) in collect_imports(&tokens) {
-        if matches!(pkg_name.as_str(), "math"|"io"|"sqlite3"|"sqllite3"|"random"|"regex"|"gui"|"os"|"sys"|"net") {
+        if BUILTIN_MODULE_NAMES.contains(&pkg_name.as_str()) {
             load_folder_package(env, &pkg_name, alias.as_deref(), debug);
         } else {
             eprintln!("Import Error: package files may only import built-in modules, not '{}'", pkg_name);
@@ -1052,7 +1487,7 @@ fn load_package_file(env: &mut Env, path: &str, debug: bool, target_pkg: &str) {
 }
 
 fn load_folder_package(env: &mut Env, pkg_name: &str, alias: Option<&str>, debug: bool) {
-    if matches!(pkg_name, "math"|"io"|"sqlite3"|"sqllite3"|"random"|"regex"|"gui"|"os"|"sys"|"net") {
+    if BUILTIN_MODULE_NAMES.contains(&pkg_name) {
         if let Some(alias_name) = alias {
             let obj_val = Scope::get(&env.scope, pkg_name);
             if alias_name != pkg_name {
@@ -1142,7 +1577,10 @@ pub fn interpret_file(path: &str, debug: bool) {
     let mut parser = Parser::new(tokens);
     let prog = parser.parse_program();
     if debug { println!("=== Parse OK ==="); }
-    run(&mut env, &prog);
+    if let Err(msg) = run_catching(&mut env, &prog) {
+        eprintln!("{}", msg);
+        process::exit(1);
+    }
 }
 
 pub fn interpret(code: &str, debug: bool) {
@@ -1163,7 +1601,43 @@ pub fn interpret(code: &str, debug: bool) {
     let mut parser = Parser::new(tokens);
     let prog = parser.parse_program();
     if debug { println!("=== Parse OK ==="); }
-    run(&mut env, &prog);
+    if let Err(msg) = run_catching(&mut env, &prog) {
+        eprintln!("{}", msg);
+        process::exit(1);
+    }
+}
+
+/// Like `interpret`, but runs against an existing `Env` instead of creating
+/// a fresh one, so variables, functions, and classes declared in one call
+/// are still there for the next one. This is what makes the interactive
+/// CLI able to "save" variables between lines: the caller keeps one `Env`
+/// alive for the whole session and passes it to every line/block typed in.
+pub fn interpret_repl(env: &mut Env, code: &str, debug: bool) {
+    let tokens = tokenize(code);
+    if let Some(pkg) = detect_package(&tokens) {
+        eprintln!("Error: code is a package file (package {}) and cannot be run directly.", pkg);
+        return;
+    }
+    if debug {
+        println!("=== TOKENS ===");
+        for (i, t) in tokens.iter().enumerate() { println!("  [{}] type={:?} value={}", i, t.typ, t.value); }
+        println!("==============");
+    }
+    let imports = collect_imports(&tokens);
+    for (pkg_name, alias) in &imports {
+        load_folder_package(env, pkg_name, alias.as_deref(), debug);
+    }
+    let mut parser = Parser::new(tokens);
+    let prog = parser.parse_program();
+    if debug { println!("=== Parse OK ==="); }
+    // Bugfix: this used to call `run` directly, so any runtime error typed
+    // into the interactive CLI (dividing by zero, a typo'd variable, ...)
+    // would process::exit(1) the *entire session* -- every variable typed
+    // so far, gone, over one mistake. Now the error is caught, printed, and
+    // the CLI just keeps prompting, exactly like a real REPL should.
+    if let Err(msg) = run_catching(env, &prog) {
+        eprintln!("{}", msg);
+    }
 }
 
 pub fn autorun(debug: bool, skip: &str) {
