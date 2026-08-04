@@ -1,0 +1,77 @@
+// bank_account.pj
+//
+// A tour of two PayJar features:
+//   1. Mandatory visibility: every field and method must be marked
+//      `public` or `private` -- there's no implicit default, same as
+//      requiring an access modifier on every class member in Java.
+//   2. `async`/`await`: an `async func` doesn't run when you call it --
+//      it hands you back a Task immediately, and only actually runs the
+//      first time you `await` it.
+
+public class main(@self){
+
+    private class BankAccount(@inner_self){
+        private let owner: String;
+        private let balance: Int;
+
+        public func init(self, owner: String, startingBalance: Int) -> Null {
+            self.owner = owner;
+            self.balance = startingBalance;
+        }
+
+        // Private: only BankAccount's own methods can call this. Outside
+        // code can't reach it, even on an instance it holds a reference to.
+        private func log(self, action: String) -> Null {
+            println("[" + self.owner + "] " + action);
+        }
+
+        public func deposit(self, amount: Int) -> Null {
+            self.balance = self.balance + amount;
+            self.log("deposited " + toStr(amount) + " -> balance " + toStr(self.balance));
+        }
+
+        public func withdraw(self, amount: Int) -> Null {
+            if (amount > self.balance) {
+                self.log("withdrawal of " + toStr(amount) + " denied (insufficient funds)");
+            } else {
+                self.balance = self.balance - amount;
+                self.log("withdrew " + toStr(amount) + " -> balance " + toStr(self.balance));
+            }
+        }
+
+        public func getBalance(self) -> Int {
+            return self.balance;
+        }
+
+        // An async method: calling it below returns a Task immediately.
+        // The "compiling statement..." line only prints the first time the
+        // Task is awaited -- not when requestStatement() is called.
+        public async func requestStatement(self) -> String {
+            self.log("compiling statement...");
+            return self.owner + "'s balance is " + toStr(self.balance);
+        }
+    }
+
+    let acc: Any = new BankAccount("Ada", 100);
+    acc.deposit(50);
+    acc.withdraw(30);
+    acc.withdraw(1000); // denied -- not enough funds left
+
+    println("Balance via public method: " + toStr(acc.getBalance()));
+
+    // Fire off the async call. Nothing has run yet at this point.
+    let pending: Any = acc.requestStatement();
+    println("Statement requested; still doing other work...");
+
+    // The body of requestStatement() runs right here, on the first await.
+    // Awaiting the same task again would just return the cached result
+    // without running it a second time.
+    let statement: String = await pending;
+    println(statement);
+
+    // Uncommenting either of the lines below is a runtime error, because
+    // `balance` and `log` are private to BankAccount:
+    //
+    //   println(acc.balance);
+    //   acc.log("sneaking in from the outside");
+}

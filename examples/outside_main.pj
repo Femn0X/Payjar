@@ -1,30 +1,21 @@
-// Functions and classes no longer have to live inside `main` — define
-// them anywhere in the file, before or after the entry point, and `main`
-// can still see and use them.
+// outside_main.pj
+//
+// Top-level `func` definitions no longer have to live inside
+// `public class main(@self){...}` -- they can sit right alongside it in
+// the file, before or after, in whatever order reads best. `run()` hoists
+// every top-level function (and class) before executing main's
+// statements, so it doesn't matter that `add` is defined below the code
+// that calls it.
 
-func square(n:Int)->Int{
-    return n*n;
-}
-
-class Greeter(@inner_self){
-    let name:Any;
-
-    func init(n:Any)->Null{
-        self.name=n;
-    }
-    func hello()->Null{
-        println(`Hello, ${self.name}! ${square(4)} is 4 squared.`);
-    }
+func square(n: Int) -> Int {
+    return n * n;
 }
 
 public class main(@self){
-    let g:Any=new Greeter("Payjar");
-    g.hello();
-    farewell(g.name);
+    println("6 squared is " + toStr(square(6)));
+    println("2 + 3 is " + toStr(add(2, 3)));
 }
 
-// This helper is defined *after* main, and is still visible to it —
-// top-level def/class declarations are hoisted before main runs.
-func farewell(n:Any)->Null{
-    println(`Goodbye, ${n}!`);
+func add(a: Int, b: Int) -> Int {
+    return a + b;
 }

@@ -8,10 +8,34 @@ pub fn remove_comments(src: &str) -> String {
     let n = bytes.len();
     let mut out = Vec::with_capacity(n);
     let mut i = 0;
+
+    // Track whether we're inside a string or template literal so comment markers
+    // (// or /*) inside quotes are preserved.
+    let mut in_str: Option<u8> = None; // Stores Some(b'"'), Some(b'\''), or Some(b'`')
+
     while i < n {
-        if i + 1 < n && bytes[i] == b'/' && bytes[i + 1] == b'/' {
+        if let Some(quote) = in_str {
+            out.push(bytes[i]);
+            // Skip escape sequences so escaped quotes (e.g., \") don't close the string early
+            if bytes[i] == b'\\' && i + 1 < n {
+                out.push(bytes[i + 1]);
+                i += 2;
+                continue;
+            }
+            if bytes[i] == quote { 
+                in_str = None; 
+            }
+            i += 1;
+        } else if bytes[i] == b'"' || bytes[i] == b'\'' || bytes[i] == b'`' {
+            // String literal start detected
+            in_str = Some(bytes[i]);
+            out.push(bytes[i]);
+            i += 1;
+        } else if i + 1 < n && bytes[i] == b'/' && bytes[i + 1] == b'/' {
+            // Line comment outside string
             while i < n && bytes[i] != b'\n' { i += 1; }
         } else if i + 1 < n && bytes[i] == b'/' && bytes[i + 1] == b'*' {
+            // Block comment outside string
             i += 2;
             while i + 1 < n && !(bytes[i] == b'*' && bytes[i + 1] == b'/') { i += 1; }
             i += 2;
@@ -20,9 +44,13 @@ pub fn remove_comments(src: &str) -> String {
             i += 1;
         }
     }
-    // SAFETY: we only copy bytes from valid UTF-8 source.
+
+    // SAFETY: We only copy bytes from a valid UTF-8 source.
     unsafe { String::from_utf8_unchecked(out) }
 }
+
+#[inline(always)]
+fn is_ident_continue(c: u8) -> bool { c.is_ascii_alphanumeric() || c == b'_' }
 
 pub struct Lexer<'a> {
     src: &'a [u8],
@@ -37,6 +65,20 @@ impl<'a> Lexer<'a> {
     #[inline(always)] fn cur(&self) -> u8  { if self.pos < self.src.len() { self.src[self.pos] } else { 0 } }
     #[inline(always)] fn peek(&self) -> u8 { let p = self.pos+1; if p < self.src.len() { self.src[p] } else { 0 } }
     #[inline(always)] fn advance(&mut self) { self.pos += 1; }
+
+    /// Consumes a trailing `i` right after a numeric literal (for Complex
+    /// literals like `3i` / `2.5i`), but only when the `i` is a genuine
+    /// suffix rather than the start of a following identifier -- so
+    /// `5if x { ... }` (unusual, but valid if someone omits the space)
+    /// still lexes as `5`, `if`, ... instead of swallowing part of `if`.
+    fn imaginary_suffix(&mut self) -> bool {
+        if self.cur() == b'i' && !is_ident_continue(self.peek()) {
+            self.advance();
+            true
+        } else {
+            false
+        }
+    }
 
     pub fn next_token(&mut self) -> Token {
         // skip whitespace
@@ -58,15 +100,21 @@ impl<'a> Lexer<'a> {
                 "public"    => TokenType::Public,
                 "private"   => TokenType::Private,
                 "class"     => TokenType::Class,
+                "enum"      =>TokenType::Enum,
+                "try"       => TokenType::Try,
+                "except"    => TokenType::Except,
+                "finally"   => TokenType::Finally,
+                "throw"     => TokenType::Throw,
                 "main"      => TokenType::Main,
                 "self"      => TokenType::Self_,
                 "inner_self" | "innerSelf" => TokenType::InnerSelf,
                 "func"      => TokenType::Def,
+                "async"     => TokenType::Async,
+                "await"     => TokenType::Await,
                 "println"   => TokenType::Print,
                 "printerr"  => TokenType::Perror,
                 "let"       => TokenType::Let,
                 "const"     => TokenType::Const,
-                "var"       => TokenType::Var,
                 "new"       => TokenType::New,
                 "readln"    => TokenType::Readln,
                 "readi"     => TokenType::Readi,
@@ -93,8 +141,8 @@ impl<'a> Lexer<'a> {
                 "Float"     => TokenType::Float,
                 "String"    => TokenType::Str,
                 "Null"      => TokenType::Null,
-                "Any"       => TokenType::Any,
                 "Array"     => TokenType::Array,
+                "Complex"   => TokenType::ComplexType,
                 _           => TokenType::Identifier,
             };
             return Token::new(tt, id);
@@ -108,9 +156,15 @@ impl<'a> Lexer<'a> {
                 self.advance();
                 while self.pos < self.src.len() && self.cur().is_ascii_digit() { self.advance(); }
                 let s = unsafe { std::str::from_utf8_unchecked(&self.src[start..self.pos]) };
+                if self.imaginary_suffix() {
+                    return Token::new(TokenType::ImaginaryLiteral, s);
+                }
                 return Token::new(TokenType::FloatLiteral, s);
             }
             let s = unsafe { std::str::from_utf8_unchecked(&self.src[start..self.pos]) };
+            if self.imaginary_suffix() {
+                return Token::new(TokenType::ImaginaryLiteral, s);
+            }
             return Token::new(TokenType::Number, s);
         }
 

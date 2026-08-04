@@ -1,0 +1,61 @@
+// enums_and_exceptions.pj
+//
+// A tour of two PayJar features:
+//   1. `enum` -- a fixed set of named constants.
+//   2. C-style `try { } except (e) { } finally { }` and `throw` -- runtime
+//      errors (and your own errors) can be caught instead of crashing the
+//      whole program.
+
+enum Color {
+    RED, GREEN, BLUE,
+}
+
+// `throw` raises your own error, catchable the same way a runtime error is.
+func validateAge(age: Int) -> Null {
+    if (age < 0) {
+        throw "age cannot be negative";
+    }
+    println(`age ${age} is valid`);
+}
+
+public class main(@self){
+
+    // --- enums -----------------------------------------------------
+    let c: Color = Color.RED;
+    println(c);                 // Color.RED
+    println(c.name());          // RED
+    println(c.ordinal());       // 0 -- RED is the first variant declared
+
+    if (c == Color.RED) {
+        println("c is RED");
+    }
+
+    let other: Color = new Color.BLUE; // `new` is optional sugar for the same thing
+    println(other == Color.RED);       // 0 (false) -- different variant
+    println(typeOf(c));                // enum
+
+    // --- try / except / finally -------------------------------------
+    // A runtime error -- dividing by zero -- is caught instead of killing
+    // the program. `e` is bound to a description of what went wrong.
+    try {
+        let bad: Int = 10 / 0;
+        println("this line never runs");
+    } except (e) {
+        println(`caught a runtime error: ${e}`);
+    } finally {
+        println("finally always runs, whether it threw or not");
+    }
+
+    // `throw` raises your own error, catchable the same way.
+    try {
+        validateAge(25);
+        validateAge(-5);
+    } except (e) {
+        println(`validation failed: ${e}`);
+    }
+
+    // Nothing stops an uncaught error from behaving exactly like before --
+    // uncomment this to see it print to stderr and exit(1):
+    //
+    //   let oops: Int = 1 / 0;
+}

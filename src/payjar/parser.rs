@@ -1,27 +1,48 @@
 use std::process;
+use std::collections::HashMap;
 use super::{Token, TokenType};
 use super::ast::{AstNode, NodeType};
 
 pub struct Parser {
     tokens: Vec<Token>,
     idx: usize,
+    var_types: HashMap<String, String>,
 }
 
 pub fn to_str(a: NodeType) -> String {
     format!("{:#?}", a)
 }
 
-pub fn all_same<T: PartialEq>(slice: &[T]) -> bool {
-    if let Some(first) = slice.first() {
-        slice.iter().all(|x| x == first)
-    } else {
-        true
+fn check_node_type(expected_type: &str, node: &AstNode) -> bool {
+    let base_type = expected_type.trim_end_matches('*');
+    if base_type == "Any" {
+        return true;
+    }
+    match node.typ {
+        NodeType::Int => base_type == "Int",
+        NodeType::Float => base_type == "Float",
+        NodeType::Str | NodeType::TemplateStr | NodeType::RegexString => base_type == "Str",
+        NodeType::Imaginary => base_type == "Complex",
+        // Bugfix: this used to compare `base_type` (the element type with
+        // any trailing '*' already stripped off, e.g. "Int") against the
+        // literal string "Array" -- which is never equal to "Int", "Float",
+        // etc., so *every* properly-declared array/pointer-depth variable
+        // (`let xs: Int* = [...]`) failed this check regardless of what it
+        // was assigned. What actually needs checking here is just whether
+        // the *declared* type is array-shaped at all (the bare `Array`
+        // keyword, or any `Type*` pointer-depth suffix) -- the precise
+        // element type and nesting depth are already checked properly,
+        // with much better error messages, right after this call returns.
+        NodeType::Array | NodeType::Generic | NodeType::Dict => {
+            expected_type == "Array" || expected_type.ends_with('*')
+        }
+        _ => true, // Complex expressions/runtime-evaluated nodes bypass static parser-level checking
     }
 }
 
 impl Parser {
     pub fn new(tokens: Vec<Token>) -> Self {
-        Parser { tokens, idx: 0 }
+        Parser { tokens, idx: 0, var_types: HashMap::new() }
     }
 
     fn cur(&self) -> &Token {
@@ -48,13 +69,6 @@ impl Parser {
             process::exit(1);
         }
     }
-
-    // Top-level programs may now freely mix `import` statements, top-level
-    // `def` function definitions, top-level `class` (or `public class`)
-    // definitions, and exactly one `public class main(@self){ ... }` entry
-    // point — in any order, before or after `main`. Everything is flattened
-    // into a single body; `run()` already hoists FuncDef/ClassDef nodes
-    // before executing the remaining statements, so order doesn't matter.
     pub fn parse_program(&mut self) -> AstNode {
         let mut prog = AstNode::new(NodeType::MainDef);
         let mut found_main = false;
@@ -73,8 +87,14 @@ impl Parser {
                 TokenType::Def => {
                     prog.body.push(self.parse_function_definition(false));
                 }
-                TokenType::Class => {
-                    prog.body.push(self.parse_class_definition());
+                TokenType::Enum => {
+                    prog.body.push(self.parse_enum_definition());
+                }
+                TokenType::Async => {
+                    self.advance();
+                    let mut f = self.parse_function_definition(false);
+                    f.set_is_async(true);
+                    prog.body.push(f);
                 }
                 TokenType::Public if self.peek(1).typ == TokenType::Class
                     && self.peek(2).typ == TokenType::Main =>
@@ -99,14 +119,26 @@ impl Parser {
                 TokenType::Public => {
                     self.advance();
                     if self.cur().typ != TokenType::Class {
-                        eprintln!("Syntax Error: expected 'class' after 'public'");
-                        process::exit(1);
+                        eprintln!("Syntax Error: expected 'class' after 'public'"); process::exit(1);
                     }
                     prog.body.push(self.parse_class_definition());
                 }
+                TokenType::Private => {
+                    self.advance();
+                    if self.cur().typ != TokenType::Class {
+                        eprintln!("Syntax Error: expected 'class' after 'private'"); process::exit(1);
+                    }
+                    let mut c = self.parse_class_definition();
+                    c.set_is_private(true);
+                    prog.body.push(c);
+                }
+                TokenType::Class => {
+                    eprintln!("Syntax Error: class declarations must start with 'public' or 'private', got bare 'class'");
+                    process::exit(1);
+                }
                 _ => {
                     eprintln!(
-                        "Syntax Error: expected 'import', top-level 'def'/'class', or 'public class main(@self){{...}}', got {:?} ('{}')",
+                        "Syntax Error: expected 'import', a top-level 'func'/'class', or 'public class main(@self){{...}}', got {:?} ('{}')",
                         self.cur().typ, self.cur().value
                     );
                     process::exit(1);
@@ -146,15 +178,13 @@ impl Parser {
         let mut pkg = AstNode::new(NodeType::MainDef);
         while self.cur().typ != TokenType::Eof {
             match self.cur().typ {
-                TokenType::Import => { self.parse_import(); }
-                TokenType::Identifier if self.cur().value == "from" => {
-                    self.advance();
-                    self.advance();
-                    self.eat(TokenType::Import);
-                    self.eat(TokenType::Multiply);
-                    self.eat(TokenType::Semicolon);
-                }
                 TokenType::Def => { pkg.body.push(self.parse_function_definition(false)); }
+                TokenType::Async => {
+                    self.advance();
+                    let mut f = self.parse_function_definition(false);
+                    f.set_is_async(true);
+                    pkg.body.push(f);
+                }
                 TokenType::Public => {
                     self.advance();
                     if self.cur().typ != TokenType::Class {
@@ -162,9 +192,21 @@ impl Parser {
                     }
                     pkg.body.push(self.parse_class_definition());
                 }
-                TokenType::Class => { pkg.body.push(self.parse_class_definition()); }
+                TokenType::Private => {
+                    self.advance();
+                    if self.cur().typ != TokenType::Class {
+                        eprintln!("Package Error: expected 'class' after 'private'"); process::exit(1);
+                    }
+                    let mut c = self.parse_class_definition();
+                    c.set_is_private(true);
+                    pkg.body.push(c);
+                }
+                TokenType::Class => {
+                    eprintln!("Package Error: class declarations must start with 'public' or 'private', got bare 'class'");
+                    process::exit(1);
+                }
                 _ => {
-                    eprintln!("Package Error: only 'import' and func/class definitions allowed in package, got '{}'",
+                    eprintln!("Package Error: only func/class definitions allowed in package, got '{}'",
                         self.cur().value);
                     process::exit(1);
                 }
@@ -180,7 +222,38 @@ impl Parser {
         }
         stmts
     }
-
+    fn parse_enum_definition(&mut self)->AstNode{
+        self.eat(TokenType::Enum);
+        let mut n=AstNode::new(NodeType::EnumDef);
+        n.name=Some(self.cur().value.clone());
+        self.eat(TokenType::Identifier);
+        self.eat(TokenType::LBrace);
+        // Bugfix: this used to assign the AstNode returned by an
+        // EnumBody-wrapping helper straight into `n.body`, but `body` is a
+        // `Vec<AstNode>` and the helper returned a single `AstNode` -- a
+        // type mismatch that meant the whole file failed to build, so no
+        // enum ever actually ran. Variant names are simple identifiers with
+        // no sub-expressions, so they're stored directly as `n.params`
+        // (a `Vec<String>`) instead of needing a wrapper node at all.
+        n.params=self.parse_enum_variants();
+        self.eat(TokenType::RBrace);
+        n
+    }
+    fn parse_enum_variants(&mut self)->Vec<String>{
+      let mut variants = Vec::new();
+      while self.cur().typ!=TokenType::RBrace && self.cur().typ!=TokenType::Eof{
+       variants.push(self.cur().value.clone());
+       self.eat(TokenType::Identifier);
+       // Trailing comma is optional: `enum X { A, B, C }` and
+       // `enum X { A, B, C, }` are both valid.
+       if self.cur().typ==TokenType::Comma{
+           self.advance();
+       } else {
+           break;
+       }
+      }
+      variants
+    }
     fn parse_function_definition(&mut self, is_method: bool) -> AstNode {
         self.eat(TokenType::Def);
         let name = self.cur().value.clone();
@@ -230,6 +303,17 @@ impl Parser {
         let mut n = AstNode::new(NodeType::ClassDef);
         n.name = Some(name);
         while self.cur().typ != TokenType::RBrace && self.cur().typ != TokenType::Eof {
+            let is_private = match self.cur().typ {
+                TokenType::Public => { self.advance(); false }
+                TokenType::Private => { self.advance(); true }
+                _ => {
+                    eprintln!(
+                        "Syntax Error: class members must start with 'public' or 'private', got '{}'",
+                        self.cur().value
+                    );
+                    process::exit(1);
+                }
+            };
             match self.cur().typ {
                 TokenType::Let | TokenType::Const => {
                     let is_const = self.cur().typ == TokenType::Const;
@@ -246,16 +330,29 @@ impl Parser {
                     let mut fd = AstNode::new(NodeType::FieldDecl);
                     fd.name = Some(fname);
                     fd.set_is_const(is_const);
+                    fd.set_is_private(is_private);
                     fd.expr = fval;
                     n.fields.push(fd);
                 }
                 TokenType::Def => {
-                    let method = self.parse_function_definition(true);
+                    let mut method = self.parse_function_definition(true);
+                    method.set_is_private(is_private);
                     if method.name.as_deref() == Some("init") {
                         n.constructor = Some(Box::new(method));
                     } else {
                         n.methods.push(method);
                     }
+                }
+                TokenType::Async => {
+                    self.advance();
+                    let mut method = self.parse_function_definition(true);
+                    method.set_is_async(true);
+                    method.set_is_private(is_private);
+                    if method.name.as_deref() == Some("init") {
+                        eprintln!("Syntax Error: constructor 'init' cannot be async");
+                        process::exit(1);
+                    }
+                    n.methods.push(method);
                 }
                 _ => {
                     eprintln!("Syntax Error: unexpected token in class body: '{}'", self.cur().value);
@@ -284,6 +381,12 @@ impl Parser {
                 self.advance();
                 n
             }
+            TokenType::ImaginaryLiteral => {
+                let mut n = AstNode::new(NodeType::Imaginary);
+                n.fval = cur_val.parse().unwrap_or(0.0);
+                self.advance();
+                n
+            }
             TokenType::StringLiteral => {
                 let mut n = AstNode::new(NodeType::Str);
                 n.str_val = Some(cur_val);
@@ -291,8 +394,6 @@ impl Parser {
                 n
             }
             TokenType::RegexString => {
-                // §"pattern" — stored as a RegexString node; evaluates to a string value
-                // that the regex module recognises as a pre-compiled pattern.
                 let mut n = AstNode::new(NodeType::RegexString);
                 n.str_val = Some(cur_val);
                 self.advance();
@@ -316,23 +417,23 @@ impl Parser {
                         }
                         i += 2;
                         let vstart = i;
-                        // ${...} can contain nested braces (e.g. a call with a
-                        // block-like arg is unlikely, but nested {} in general
-                        // expressions isn't, so just track depth defensively).
-                        let mut depth = 0i32;
-                        while i < len && !(chars[i] == '}' && depth == 0) {
-                            if chars[i] == '{' { depth += 1; }
-                            if chars[i] == '}' { depth -= 1; }
-                            i += 1;
-                        }
+                        while i < len && chars[i] != '}' { i += 1; }
                         let varexpr: String = chars[vstart..i].iter().collect();
                         i += 1;
-                        // Parse the interpolated text as a full expression, so
-                        // things like `${square(4)}`, `${a.b}`, `${a+b}` all work,
-                        // not just bare variable/single-field access.
-                        let sub_tokens = super::tokenize(&varexpr);
-                        let mut sub_parser = Parser::new(sub_tokens);
-                        let part_node = sub_parser.parse_expression();
+                        let part_node = if let Some(dot_pos) = varexpr.find('.') {
+                            let obj_n = &varexpr[..dot_pos];
+                            let mem_n = &varexpr[dot_pos + 1..];
+                            let mut obj_node = AstNode::new(NodeType::VarAccess);
+                            obj_node.name = Some(obj_n.to_string());
+                            let mut ma = AstNode::new(NodeType::MemberAccess);
+                            ma.object = Some(Box::new(obj_node));
+                            ma.name = Some(mem_n.to_string());
+                            ma
+                        } else {
+                            let mut va = AstNode::new(NodeType::VarAccess);
+                            va.name = Some(varexpr);
+                            va
+                        };
                         n.template_parts.push(part_node);
                     } else if i < len {
                         buf.push(chars[i]);
@@ -408,6 +509,22 @@ impl Parser {
                 self.advance();
                 let class_name = self.cur().value.clone();
                 self.eat(TokenType::Identifier);
+                // `new Color.RED` -- enum constants aren't constructed, so
+                // this is just sugar for the plain `Color.RED` member-access
+                // form (kept so existing `new Enum.Variant` call sites, and
+                // anyone coming from a language where `new` is always
+                // required, keep working).
+                if self.cur().typ == TokenType::Dot {
+                    self.advance();
+                    let variant = self.cur().value.clone();
+                    self.eat(TokenType::Identifier);
+                    let mut obj = AstNode::new(NodeType::VarAccess);
+                    obj.name = Some(class_name);
+                    let mut ma = AstNode::new(NodeType::MemberAccess);
+                    ma.object = Some(Box::new(obj));
+                    ma.name = Some(variant);
+                    return ma;
+                }
                 self.eat(TokenType::LParen);
                 let mut n = AstNode::new(NodeType::ObjectCreation);
                 n.name = Some(class_name);
@@ -462,10 +579,16 @@ impl Parser {
                 n.left = Some(Box::new(operand));
                 n
             }
+            TokenType::Await => {
+                self.advance();
+                let operand = self.parse_primary();
+                let mut n = AstNode::new(NodeType::Await);
+                n.left = Some(Box::new(operand));
+                n
+            }
             TokenType::Identifier => {
                 let name = cur_val.clone();
                 self.advance();
-                // function call
                 if self.cur().typ == TokenType::LParen {
                     self.advance();
                     let mut n = AstNode::new(NodeType::FuncCall);
@@ -478,7 +601,6 @@ impl Parser {
                         }
                     }
                     self.eat(TokenType::RParen);
-                    // chain member calls: func().method()
                     let mut result = n;
                     while self.cur().typ == TokenType::Dot {
                         self.advance();
@@ -503,7 +625,6 @@ impl Parser {
                     }
                     return result;
                 }
-                // member access chain: obj.field / obj.method()
                 if self.cur().typ == TokenType::Dot {
                     let mut obj = AstNode::new(NodeType::VarAccess);
                     obj.name = Some(name);
@@ -530,7 +651,6 @@ impl Parser {
                     }
                     return obj;
                 }
-                // index: arr[i]
                 if self.cur().typ == TokenType::LBrack {
                     self.advance();
                     let idx = self.parse_expression();
@@ -542,17 +662,14 @@ impl Parser {
                     n.right = Some(Box::new(idx));
                     return n;
                 }
-                // plain variable
                 let mut n = AstNode::new(NodeType::VarAccess);
                 n.name = Some(name);
                 n
             }
             TokenType::LBrace => {
-                // Dict literal: { key: expr, key: expr, ... }
-                self.advance(); // consume '{'
+                self.advance();
                 let mut n = AstNode::new(NodeType::Dict);
                 while self.cur().typ != TokenType::RBrace && self.cur().typ != TokenType::Eof {
-                    // key: identifier or string literal
                     let key = self.cur().value.clone();
                     match self.cur().typ {
                         TokenType::Identifier | TokenType::StringLiteral => { self.advance(); }
@@ -563,7 +680,6 @@ impl Parser {
                     }
                     self.eat(TokenType::Colon);
                     let val = self.parse_expression();
-                    // store key as a Str node, value as the expr; interleaved in args
                     let mut key_node = AstNode::new(NodeType::Str);
                     key_node.str_val = Some(key);
                     n.args.push(key_node);
@@ -678,14 +794,23 @@ impl Parser {
                     eprintln!("TypeError: Null cannot be a pointer type"); process::exit(1);
                 }
             }
-            TokenType::Any => {
-                re += "Any";
-                self.eat(TokenType::Any);
+            
+            TokenType::ComplexType => {
+                re += "Complex";
+                self.eat(TokenType::ComplexType);
                 while self.cur().typ == TokenType::Multiply { self.advance(); re += "*"; }
             }
+            // Bugfix: a type annotation naming anything other than the
+            // handful of builtins above -- including `Any` (which
+            // `check_node_type` already special-cased, expecting this to be
+            // reachable) and any user class or enum name (`Color`,
+            // `BankAccount`, ...) -- used to fall into the `_` arm below and
+            // hard-exit with "TypeError: ... is not a valid type" before the
+            // program ever ran. Any identifier is now accepted as a type
+            // name; `check_node_type` already treats non-builtin type names
+            // permissively (custom types are checked at runtime instead).
             TokenType::Identifier => {
-                // A user-defined class name used as a type, e.g. `let r:Rect = new Rect(10,10);`
-                re += &self.cur().value;
+                re += &self.cur().value.clone();
                 self.eat(TokenType::Identifier);
                 while self.cur().typ == TokenType::Multiply { self.advance(); re += "*"; }
             }
@@ -706,11 +831,16 @@ impl Parser {
         let var_type = self.parse_type();
         self.eat(TokenType::Equal);
         let val = self.parse_expression();
+
+        if !check_node_type(&var_type, &val) {
+            eprintln!("TypeError: Variable '{}' declared as '{}' but assigned incompatible expression", name, var_type);
+            process::exit(1);
+        }
+
         let declared_depth = var_type.chars().filter(|&c| c == '*').count();
         let is_dict_node = val.typ == NodeType::Dict;
-        // For Array (no stars) allow a dict literal
         if var_type == "Array" && !is_dict_node && matches!(val.typ, NodeType::Array | NodeType::Generic) {
-            // plain Array — ok, no depth to verify
+            // plain Array — ok
         } else if var_type == "Array" && !is_dict_node && !matches!(val.typ, NodeType::Array | NodeType::Generic) {
             eprintln!("TypeError: '{}' declared as 'Array' but assigned a non-collection", name);
             process::exit(1);
@@ -739,6 +869,7 @@ impl Parser {
             }
         }
         self.eat(TokenType::Semicolon);
+        self.var_types.insert(name.clone(), var_type.clone());
         let mut n = AstNode::new(NodeType::VarDecl);
         n.name = Some(name);
         n.set_is_const(is_const);
@@ -752,6 +883,14 @@ impl Parser {
         self.eat(TokenType::Identifier);
         self.eat(TokenType::Equal);
         let val = self.parse_expression();
+
+        if let Some(expected_type) = self.var_types.get(&name).cloned() {
+            if !check_node_type(&expected_type, &val) {
+                eprintln!("TypeError: Cannot assign expression to variable '{}' of type '{}'", name, expected_type);
+                process::exit(1);
+            }
+        }
+
         self.eat(TokenType::Semicolon);
         let mut n = AstNode::new(NodeType::Assign);
         n.name = Some(name);
@@ -872,7 +1011,7 @@ impl Parser {
     fn parse_for(&mut self) -> AstNode {
         self.eat(TokenType::For);
         self.eat(TokenType::LParen);
-        if !matches!(self.cur().typ, TokenType::Let | TokenType::Const | TokenType::Var) {
+        if !matches!(self.cur().typ, TokenType::Let | TokenType::Const) {
             eprintln!("Syntax Error: for loop expects variable declaration"); process::exit(1);
         }
         self.advance();
@@ -909,6 +1048,44 @@ impl Parser {
         n
     }
 
+    /// `try { ... } except (e) { ... }` -- deliberately C-styled (like
+    /// C++/Java's `try { } catch (e) { }`) rather than Python's
+    /// `try: ... except ... as e:`: braces delimit both blocks and the
+    /// caught-exception identifier is parenthesized, consistent with how
+    /// every other block construct in this language (if/while/for) looks.
+    fn parse_try(&mut self) -> AstNode {
+        self.eat(TokenType::Try);
+        self.eat(TokenType::LBrace);
+        let try_body = self.parse_body();
+        self.eat(TokenType::RBrace);
+        let mut n = AstNode::new(NodeType::Try);
+        n.body = try_body;
+        self.eat(TokenType::Except);
+        self.eat(TokenType::LParen);
+        n.name = Some(self.cur().value.clone());
+        self.eat(TokenType::Identifier);
+        self.eat(TokenType::RParen);
+        self.eat(TokenType::LBrace);
+        n.else_body = self.parse_body();
+        self.eat(TokenType::RBrace);
+        if self.cur().typ == TokenType::Finally {
+            self.advance();
+            self.eat(TokenType::LBrace);
+            n.finally_body = self.parse_body();
+            self.eat(TokenType::RBrace);
+        }
+        n
+    }
+
+    fn parse_throw(&mut self) -> AstNode {
+        self.eat(TokenType::Throw);
+        let e = self.parse_expression();
+        self.eat(TokenType::Semicolon);
+        let mut n = AstNode::new(NodeType::Throw);
+        n.expr = Some(Box::new(e));
+        n
+    }
+
     fn parse_statement(&mut self) -> AstNode {
         let cur_typ = self.cur().typ.clone();
         match cur_typ {
@@ -919,19 +1096,44 @@ impl Parser {
                 self.eat(TokenType::Semicolon);
                 expr
             }
-            TokenType::Let | TokenType::Const | TokenType::Var => self.parse_var_decl(),
+            TokenType::Await => {
+                let expr = self.parse_expression();
+                self.eat(TokenType::Semicolon);
+                expr
+            }
+            TokenType::Let | TokenType::Const => self.parse_var_decl(),
             TokenType::Def => self.parse_function_definition(false),
+            TokenType::Async => {
+                self.advance();
+                let mut f = self.parse_function_definition(false);
+                f.set_is_async(true);
+                f
+            }
             TokenType::Public => {
                 self.advance();
                 if self.cur().typ == TokenType::Class { return self.parse_class_definition(); }
                 eprintln!("Syntax Error: expected 'class' after 'public'"); process::exit(1);
             }
-            TokenType::Class => self.parse_class_definition(),
+            TokenType::Private => {
+                self.advance();
+                if self.cur().typ == TokenType::Class {
+                    let mut c = self.parse_class_definition();
+                    c.set_is_private(true);
+                    return c;
+                }
+                eprintln!("Syntax Error: expected 'class' after 'private'"); process::exit(1);
+            }
+            TokenType::Class => {
+                eprintln!("Syntax Error: class declarations must start with 'public' or 'private', got bare 'class'");
+                process::exit(1);
+            }
             TokenType::If => self.parse_if(),
             TokenType::While => self.parse_while(),
             TokenType::For => self.parse_for(),
             TokenType::Return => self.parse_return_stmt(),
             TokenType::Import => self.parse_import(),
+            TokenType::Try => self.parse_try(),
+            TokenType::Throw => self.parse_throw(),
             TokenType::Break => {
                 self.advance();
                 self.eat(TokenType::Semicolon);
@@ -943,7 +1145,6 @@ impl Parser {
                 AstNode::new(NodeType::Continue)
             }
             _ => {
-                // index assign: name[expr] = expr;
                 if cur_typ == TokenType::Identifier && self.peek(1).typ == TokenType::LBrack {
                     let obj_name = self.cur().value.clone();
                     self.advance();
