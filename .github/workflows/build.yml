@@ -1,20 +1,14 @@
 name: Build Payjar (Windows + macOS)
 
 # Runs on every push/PR to main for a quick sanity build, and produces
-# downloadable release artifacts whenever you push a tag like "v1.4.0"
-# or trigger the workflow manually from the Actions tab.
+# downloadable release artifacts whenever you push a tag like "v1.4.0".
 on:
   push:
     branches: [main]
     tags: ["v*"]
   pull_request:
     branches: [main]
-  workflow_dispatch:
-    inputs:
-      release_tag:
-        description: "Optional release tag to publish (for example v1.4.0). Leave blank to use the current ref."
-        required: false
-        type: string
+  workflow_dispatch: {}   # lets you click "Run workflow" manually in the Actions tab
 
 env:
   CARGO_TERM_COLOR: always
@@ -112,15 +106,16 @@ jobs:
           path: dist/Payjar-macos-universal.zip
 
   # ---------------------------------------------------------------------
-  # On a tag push (e.g. `git tag v1.4.0 && git push origin v1.4.0`)
-  # or a manual run from the Actions tab, collect both zip files and attach
-  # them to a GitHub Release.
+  # On a tag push (e.g. `git tag v1.4.0 && git push origin v1.4.0`),
+  # collect both zip files and attach them to a GitHub Release.
   # ---------------------------------------------------------------------
   release:
     name: Publish GitHub Release
     needs: [windows, macos]
-    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
+    permissions:
+      contents: write   # required to create a GitHub Release + upload assets
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -129,8 +124,6 @@ jobs:
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.event.inputs.release_tag || github.ref_name }}
-          name: Release ${{ github.event.inputs.release_tag || github.ref_name }}
           files: |
             artifacts/Payjar-windows-x86_64/Payjar-windows-x86_64.zip
             artifacts/Payjar-macos-universal/Payjar-macos-universal.zip
