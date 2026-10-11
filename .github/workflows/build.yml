@@ -19,36 +19,7 @@ jobs:
   # windows-latest runners (no extra setup needed for the C deps:
   # rusqlite's bundled sqlite3 and egui/eframe both compile fine here).
   # ---------------------------------------------------------------------
-  windows:
-    name: Windows (x86_64)
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust (stable)
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache cargo registry/target
-        uses: Swatinem/rust-cache@v2
-
-      - name: Build release binary
-        run: cargo build --release
-
-      - name: Package
-        shell: pwsh
-        run: |
-          $dest = "dist/Payjar-windows-x86_64"
-          New-Item -ItemType Directory -Force -Path $dest | Out-Null
-          Copy-Item target/release/Payjar.exe "$dest/Payjar.exe"
-          Copy-Item README.md "$dest/README.md"
-          Copy-Item -Recurse examples "$dest/examples"
-          Compress-Archive -Path "$dest/*" -DestinationPath "dist/Payjar-windows-x86_64.zip"
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: Payjar-windows-x86_64
-          path: dist/Payjar-windows-x86_64.zip
-
+  
   # ---------------------------------------------------------------------
   # macOS: builds both Apple Silicon (aarch64) and Intel (x86_64) on the
   # same macos-latest runner (it ships both SDKs), then glues them into
