@@ -32,11 +32,37 @@ jobs:
       - name: Run tests
         run: cargo test
   # ---------------------------------------------------------------------
-  # Windows: builds Payjar.exe with the MSVC toolchain that ships on
-  # windows-latest runners (no extra setup needed for the C deps:
-  # rusqlite's bundled sqlite3 and egui/eframe both compile fine here).
+  # Windows: build and package the x86_64 executable.
   # ---------------------------------------------------------------------
-  
+  windows:
+    name: Windows x86_64
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build release executable
+        run: cargo build --release
+
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist/Payjar-windows-x86_64 | Out-Null
+          Copy-Item target/release/Payjar.exe dist/Payjar-windows-x86_64/
+          Copy-Item README.md dist/Payjar-windows-x86_64/
+          Copy-Item examples dist/Payjar-windows-x86_64/ -Recurse
+          Compress-Archive -Path dist/Payjar-windows-x86_64 -DestinationPath dist/Payjar-windows-x86_64.zip -Force
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Payjar-windows-x86_64
+          path: dist/Payjar-windows-x86_64.zip
+
   # ---------------------------------------------------------------------
   # macOS: builds both Apple Silicon (aarch64) and Intel (x86_64) on the
   # same macos-latest runner (it ships both SDKs), then glues them into
