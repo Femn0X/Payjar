@@ -77,6 +77,22 @@ PayJar includes the following modules accessed via dot notation (e.g., `math.sin
 
 ---
 
+## Runtime backend (experimental JIT)
+
+PayJar defaults to the existing interpreter, preserving current behavior. To opt into the experimental Cranelift fast path, set the root `config.toml` to:
+
+```toml
+backend = "jit"
+```
+
+Alternatively, set `PAYJAR_BACKEND=jit` in the environment. An absent config file or `backend = "interpreter"` keeps the default tree-walker. `auto` currently enables the same conservative fast path as `jit`.
+
+The initial JIT compiles only pure integer-literal arithmetic trees using `+`, `-`, and `*`. Expressions with variables, calls, floats, unsupported operators, overflow, or JIT compilation errors fall back to the existing interpreter. This is an incremental first stage, not a claim that whole programs are compiled to native code.
+
+Build with `cargo build --release`. Cranelift may increase build time and binary size.
+
+---
+
 ## Building the Interpreter
 
 ### Rust
