@@ -17,7 +17,7 @@ thread_local! {
 }
 
 fn cache_key(node: &AstNode, out: &mut String) -> Option<()> {
-    match node.typ {
+    match &node.typ {
         NodeType::Int => out.push_str(&format!("i{};", node.int_val)),
         NodeType::BinaryOp => {
             let op = node.str_val.as_deref()?;
@@ -35,7 +35,7 @@ fn cache_key(node: &AstNode, out: &mut String) -> Option<()> {
 }
 
 fn lower(node: &AstNode, builder: &mut FunctionBuilder<'_>) -> Option<cranelift_codegen::ir::Value> {
-    match node.typ {
+    match &node.typ {
         NodeType::Int => Some(builder.ins().iconst(types::I64, node.int_val)),
         NodeType::BinaryOp => {
             let op = node.str_val.as_deref()?;
@@ -57,7 +57,7 @@ fn lower(node: &AstNode, builder: &mut FunctionBuilder<'_>) -> Option<cranelift_
 /// backend errors, or arithmetic whose interpreter semantics could overflow.
 pub fn try_eval_integer_constant(node: &AstNode) -> Option<i64> {
     fn checked(node: &AstNode) -> Option<i64> {
-        match node.typ {
+        match &node.typ {
             NodeType::Int => Some(node.int_val),
             NodeType::BinaryOp => {
                 let a = checked(node.left.as_deref()?)?;
@@ -94,7 +94,7 @@ pub fn try_eval_integer_constant(node: &AstNode) -> Option<i64> {
     module.define_function(id, &mut ctx).ok()?;
     module.clear_context(&mut ctx);
     module.finalize_definitions().ok()?;
-    let code = module.get_finalized_function(id);
+    let code = unsafe { module.get_finalized_function(id) };
     let f: extern "C" fn() -> i64 = unsafe { std::mem::transmute(code) };
     let actual = f();
     if actual != expected {
