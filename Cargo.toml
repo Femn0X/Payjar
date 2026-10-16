@@ -22,7 +22,10 @@ rustc-hash = "2"
 rustls = { version = "0.23", default-features = false, features = ["logging", "std", "tls12", "ring"] }
 url        = "2.5"
 rustls-native-certs = "0.8"
-
+cranelift-codegen = "0.125"
+cranelift-frontend = "0.125"
+cranelift-jit = "0.125"
+cranelift-module = "0.125"
 
 [profile.release]
 lto           = "fat"
