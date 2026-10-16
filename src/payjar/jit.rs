@@ -73,3 +73,41 @@ pub fn try_eval_integer_constant(node: &AstNode) -> Option<i64> {
     let actual = f();
     (actual == expected).then_some(actual)
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn int(value: i64) -> AstNode {
+        let mut n = AstNode::new(NodeType::Int);
+        n.int_val = value;
+        n
+    }
+
+    fn binary(op: &str, left: AstNode, right: AstNode) -> AstNode {
+        let mut n = AstNode::new(NodeType::BinaryOp);
+        n.str_val = Some(op.to_string());
+        n.left = Some(Box::new(left));
+        n.right = Some(Box::new(right));
+        n
+    }
+
+    #[test]
+    fn jit_evaluates_nested_integer_arithmetic() {
+        let expression = binary("+", int(10), binary("*", int(6), int(7)));
+        assert_eq!(try_eval_integer_constant(&expression), Some(52));
+    }
+
+    #[test]
+    fn unsupported_operators_fall_back() {
+        let expression = binary("/", int(8), int(2));
+        assert_eq!(try_eval_integer_constant(&expression), None);
+    }
+
+    #[test]
+    fn overflowing_integer_expression_falls_back() {
+        let expression = binary("+", int(i64::MAX), int(1));
+        assert_eq!(try_eval_integer_constant(&expression), None);
+    }
+}
