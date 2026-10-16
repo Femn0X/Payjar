@@ -7,6 +7,32 @@ use cranelift_codegen::ir::{types, AbiParam, InstBuilder};
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
 use cranelift_jit::{JITBuilder, JITModule};
 use cranelift_module::{default_libcall_names, Linkage, Module};
+use std::cell::RefCell;
+use std::collections::HashMap;
+
+thread_local! {
+    /// Cache results for repeated identical constant trees so the JIT compiler
+    /// is not recreated on every evaluation of the same expression.
+    static CONSTANT_CACHE: RefCell<HashMap<String, i64>> = RefCell::new(HashMap::new());
+}
+
+fn cache_key(node: &AstNode, out: &mut String) -> Option<()> {
+    match node.typ {
+        NodeType::Int => out.push_str(&format!("i{};", node.int_val)),
+        NodeType::BinaryOp => {
+            let op = node.str_val.as_deref()?;
+            if !matches!(op, "+" | "-" | "*") { return None; }
+            out.push('(');
+            out.push_str(op);
+            out.push(':');
+            cache_key(node.left.as_deref()?, out)?;
+            cache_key(node.right.as_deref()?, out)?;
+            out.push(')');
+        }
+        _ => return None,
+    }
+    Some(())
+}
 
 fn lower(node: &AstNode, builder: &mut FunctionBuilder<'_>) -> Option<cranelift_codegen::ir::Value> {
     match node.typ {
@@ -71,7 +97,13 @@ pub fn try_eval_integer_constant(node: &AstNode) -> Option<i64> {
     let code = module.get_finalized_function(id);
     let f: extern "C" fn() -> i64 = unsafe { std::mem::transmute(code) };
     let actual = f();
-    (actual == expected).then_some(actual)
+    if actual != expected {
+        return None;
+    }
+    CONSTANT_CACHE.with(|cache| {
+        cache.borrow_mut().insert(key, actual);
+    });
+    Some(actual)
 }
 
 
