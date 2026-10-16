@@ -6,6 +6,7 @@ pub mod parser;
 pub mod builtins;
 pub mod sqlite3;
 pub mod gui_channel;
+pub mod jit;
 
 // Re-export everything callers need
 pub use ast::{AstNode, NodeType};
@@ -18,6 +19,26 @@ use std::fs;
 use std::io::{self, BufRead, Write};
 use std::process;
 use std::rc::Rc;
+use std::sync::OnceLock;
+
+fn jit_backend_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        if let Ok(value) = std::env::var("PAYJAR_BACKEND") {
+            return value.eq_ignore_ascii_case("jit") || value.eq_ignore_ascii_case("auto");
+        }
+        fs::read_to_string("config.toml").ok().and_then(|s| {
+            s.lines().find_map(|line| {
+                let (key, value) = line.split_once('=')?;
+                if key.trim() == "backend" {
+                    Some(value.trim().trim_matches('"').to_ascii_lowercase())
+                } else {
+                    None
+                }
+            })
+        }).map(|v| v == "jit" || v == "auto").unwrap_or(false)
+    })
+}
 // ============================================================
 // TOKEN TYPES  (used by lexer, parser, and interpreter)
 // ============================================================
@@ -1020,6 +1041,12 @@ pub fn eval(env: &mut Env, node: &AstNode, self_obj: Option<Rc<RefCell<PJObject>
         }
 
         NodeType::BinaryOp => {
+            // Conservative native fast path; unsupported trees retain interpreter semantics.
+            if jit_backend_enabled() {
+                if let Some(value) = jit::try_eval_integer_constant(node) {
+                    return Value::Int(value);
+                }
+            }
             let lv = eval(env, node.left.as_ref().unwrap(), self_obj.clone());
             let rv = eval(env, node.right.as_ref().unwrap(), self_obj);
             let op = node.str_val.as_deref().unwrap();
