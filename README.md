@@ -1,7 +1,7 @@
 # PayJar
 
 <div align="center">
-  <img src="assets/payjar-logo.png" alt="Payjar logo" width="200" />
+  <img src="payjar-logo.png" alt="Payjar logo" width="200" />
 
   # Payjar
 
