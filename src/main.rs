@@ -84,7 +84,7 @@ fn main() {
 
     match args[1].as_str() {
         "cli" => { cli(); }
-        "version" => { println!("1.4.0"); }
+        "version" => { println!("1.5.0"); }
         "help" => { payjar::print_usage_pjc(); }
         "autorun" => {
             let debug = args.iter().any(|a| a == "-d");
