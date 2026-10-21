@@ -102,8 +102,8 @@ pub fn try_eval_integer_constant(node: &AstNode) -> Option<i64> {
     }
     /* WIP
     CONSTANT_CACHE.with(|cache| {
-        cache.borrow_mut().insert(key, actual);*/
-    });
+        cache.borrow_mut().insert(key, actual);
+    });*/
     Some(actual)
 }
 
