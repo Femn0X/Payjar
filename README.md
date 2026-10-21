@@ -1,5 +1,13 @@
 # PayJar
 
+<div align="center">
+  <img src="assets/payjar-logo.png" alt="Payjar logo" width="200" />
+
+  # Payjar
+
+  **A modern programming language.**
+</div>
+
 PayJar is a simple, lightweight interpreter for the **Payjar** programming language. The interpreter core is implemented in **Rust** for improved performance and memory safety. The language is designed to be familiar to Java/JavaScript developers with a minimal syntax, modern features, and a tiny runtime.
 
 The repository also contains a React‑based IDE (`react-ide/`) that can be used to edit and run PayJar programs in the browser or as a Tauri desktop application.
