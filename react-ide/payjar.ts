@@ -423,6 +423,11 @@ export class Parser {
         this.advance();
         const variableName = this.current_token!.value;
         this.eat('IDENTIFIER');
+        if (this.current_token?.type === 'COLON') {
+            this.eat('COLON');
+            if (!this.current_token) throw new Error("Syntax Error: Expected variable type after ':'.");
+            this.advance(); // Type annotation is informational in the browser runtime.
+        }
         this.eat('EQUAL');
         const valueExpression = this.parseExpression();
         this.eat('SEMICOLON');
