@@ -77,6 +77,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent-stro
 .editor-tab .file-icon { color: #aaa4ff; }
 .tab-dot { width: 5px; height: 5px; margin-left: auto; border-radius: 50%; background: #9fa7bd; }
 .tab-spacer { flex: 1; min-width: 8px; }
+.editor-area { display: flex; flex: 1; min-height: 0; overflow: hidden; }
 .ide-workbench { display: flex; flex: 1; flex-direction: column; min-height: 0; overflow: hidden; background: #11131b; }
 .editor-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 43px; padding: 0 15px; background: #141620; border-bottom: 1px solid #242735; }
 .editor-toolbar-left, .editor-toolbar-right { display: flex; align-items: center; gap: 9px; min-width: 0; }
