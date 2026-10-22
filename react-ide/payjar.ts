@@ -294,7 +294,11 @@ export class Parser {
     private parseMainBody(): ASTNode[] {
         const statements: ASTNode[] = [];
         while (this.current_token && this.current_token.type !== 'RBRACE') {
-            if (this.current_token.type === 'PRINT') {
+            if (this.current_token.type === 'IF') {
+                statements.push(this.parseIfStatement());
+            } else if (this.current_token.type === 'WHILE') {
+                statements.push(this.parseWhileStatement());
+            } else if (this.current_token.type === 'PRINT') {
                 statements.push(this.parsePrintStatement());
             } else if (['VAR', 'CONST', 'LET'].includes(this.current_token.type)) {
                 statements.push(this.parseVariableDeclaration());
@@ -329,6 +333,43 @@ export class Parser {
         return statements;
     }
     
+    private parseIfStatement(): ASTNode {
+        this.eat('IF');
+        this.eat('LPAREN');
+        const condition = this.parseExpression();
+        this.eat('RPAREN');
+        this.eat('LBRACE');
+        const body = this.parseMainBody();
+        this.eat('RBRACE');
+        let elseBody: ASTNode[] = [];
+        let elseIf: { condition: ASTNode; body: ASTNode[] }[] = [];
+        if (this.current_token?.type === 'ELSE') {
+            this.eat('ELSE');
+            if (this.current_token?.type === 'IF') {
+                const nested = this.parseIfStatement();
+                elseIf.push({ condition: nested.condition, body: nested.body });
+                elseIf.push(...(nested.else_if || []));
+                elseBody = nested.else_body || [];
+            } else {
+                this.eat('LBRACE');
+                elseBody = this.parseMainBody();
+                this.eat('RBRACE');
+            }
+        }
+        return { type: 'if_statement', condition, body, else_if: elseIf, else_body: elseBody };
+    }
+
+    private parseWhileStatement(): ASTNode {
+        this.eat('WHILE');
+        this.eat('LPAREN');
+        const condition = this.parseExpression();
+        this.eat('RPAREN');
+        this.eat('LBRACE');
+        const body = this.parseMainBody();
+        this.eat('RBRACE');
+        return { type: 'while_statement', condition, body };
+    }
+
     // --- Utility Parsing Functions ---
 
     private parsePrintStatement(): ASTNode {
@@ -636,6 +677,8 @@ export class Parser {
                 body.push(this.parseReturnStatement());
             } 
             // The body parsing logic should mirror parseMainBody() for local statements
+            else if (this.current_token.type === 'IF') { body.push(this.parseIfStatement()); }
+            else if (this.current_token.type === 'WHILE') { body.push(this.parseWhileStatement()); }
             else if (this.current_token.type === 'PRINT') {body.push(this.parsePrintStatement());}
             else if (['CONST', 'LET', 'VAR'].includes(this.current_token.type)) {body.push(this.parseVariableDeclaration());}
             else if (this.current_token.type === 'IDENTIFIER') {
@@ -803,6 +846,8 @@ export class Interpreter {
     private visit(node: ASTNode, current_instance: PayJarObject | null = null): any {
         switch (node.type) {
             case "print_statement": return this.visitPrintStatement(node);
+            case "if_statement": return this.visitIfStatement(node, current_instance);
+            case "while_statement": return this.visitWhileStatement(node, current_instance);
             case "readln": return this.visitReadln(node);
             case "variable_declaration": return this.visitVariableDeclaration(node);
             case "assignment_statement": return this.visitAssignmentStatement(node);
@@ -824,6 +869,40 @@ export class Interpreter {
     }
 
     // --- Visit Implementations ---
+
+    private visitIfStatement(node: ASTNode, currentInstance: PayJarObject | null): any {
+        const truthy = Boolean(this.visit(node.condition, currentInstance));
+        if (truthy) {
+            this.push_scope();
+            try { for (const statement of node.body) this.visit(statement, currentInstance); }
+            finally { this.pop_scope(); }
+            return;
+        }
+        for (const branch of node.else_if || []) {
+            if (Boolean(this.visit(branch.condition, currentInstance))) {
+                this.push_scope();
+                try { for (const statement of branch.body) this.visit(statement, currentInstance); }
+                finally { this.pop_scope(); }
+                return;
+            }
+        }
+        if (node.else_body?.length) {
+            this.push_scope();
+            try { for (const statement of node.else_body) this.visit(statement, currentInstance); }
+            finally { this.pop_scope(); }
+        }
+    }
+
+    private visitWhileStatement(node: ASTNode, currentInstance: PayJarObject | null): void {
+        // Guard against a runaway loop locking up the browser tab.
+        let iterations = 0;
+        while (Boolean(this.visit(node.condition, currentInstance))) {
+            if (++iterations > 1_000_000) throw new Error('Runtime Error: Loop iteration limit exceeded (1,000,000).');
+            this.push_scope();
+            try { for (const statement of node.body) this.visit(statement, currentInstance); }
+            finally { this.pop_scope(); }
+        }
+    }
 
     private visitPrintStatement(node: ASTNode): void {
         const valueToPrint = this.visit(node.expression);
