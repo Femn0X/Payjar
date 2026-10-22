@@ -534,7 +534,8 @@ export class Parser {
             return { type: "template_string", parts: templateParts };
         } else if (this.current_token!.type === 'SELF') {
             this.eat('SELF');
-            return { type: "variable_access", name: "self" };
+            const selfExpr: ASTNode = { type: "variable_access", name: "self" };
+            return this.current_token?.type === 'DOT' ? this.parseMemberAccess(selfExpr) : selfExpr;
         } else if (this.current_token!.type === 'IDENTIFIER') {
             const name = this.current_token!.value;
             this.advance();
@@ -1030,6 +1031,23 @@ export class Interpreter {
     
     private visitFunctionCall(node: ASTNode, currentInstance: PayJarObject | null): any {
         const funcName = node.name;
+        const providedArgsNodes = node.arguments as ASTNode[];
+        if (funcName === 'toStr') {
+            if (providedArgsNodes.length !== 1) throw new Error("Runtime Error: toStr expects exactly one argument.");
+            return String(this.visit(providedArgsNodes[0], currentInstance));
+        }
+        if (funcName === 'toInt') {
+            if (providedArgsNodes.length !== 1) throw new Error("Runtime Error: toInt expects exactly one argument.");
+            const value = Number(this.visit(providedArgsNodes[0], currentInstance));
+            if (!Number.isFinite(value)) throw new Error("Runtime Error: toInt received a non-numeric value.");
+            return Math.trunc(value);
+        }
+        if (funcName === 'toFloat') {
+            if (providedArgsNodes.length !== 1) throw new Error("Runtime Error: toFloat expects exactly one argument.");
+            const value = Number(this.visit(providedArgsNodes[0], currentInstance));
+            if (!Number.isFinite(value)) throw new Error("Runtime Error: toFloat received a non-numeric value.");
+            return value;
+        }
         let funcDefinition: ASTNode | null = null;
 
         if (currentInstance && funcName in currentInstance.methods) {
@@ -1041,8 +1059,6 @@ export class Interpreter {
         }
 
         const expectedParams = funcDefinition!.parameters as string[];
-        const providedArgsNodes = node.arguments as ASTNode[];
-
         const isMethod = funcDefinition!.is_method;
         const paramOffset = (isMethod && expectedParams[0] === 'self') ? 1 : 0;
         const expectedArgsCount = expectedParams.length - paramOffset;
