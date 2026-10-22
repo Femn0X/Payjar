@@ -1278,7 +1278,7 @@ export class PJRT {
         private entryPath: string = 'main.pj'
     ) {}
 
-    private resolveImports(source: string, fromPath: string, stack: string[] = []): string {
+    private resolveImports(source: string, fromPath: string, stack: string[] = [], loaded: Set<string> = new Set()): string {
         const directory = fromPath.includes('/') ? fromPath.slice(0, fromPath.lastIndexOf('/') + 1) : '';
         const importPattern = /^\s*import\s+(?:"([^"]+)"|'([^']+)'|([A-Za-z0-9_./-]+))\s*;?\s*$/gm;
         let result = '';
@@ -1300,9 +1300,11 @@ export class PJRT {
             let resolved = parts.join('/');
             if (!/\.[A-Za-z0-9]+$/.test(resolved)) resolved += '.pj';
             if (stack.includes(resolved)) throw new Error(`Import Error: Circular import detected: ${[...stack, resolved].join(' -> ')}`);
+            if (loaded.has(resolved)) { result += '\n'; continue; }
             const imported = this.workspaceFiles[resolved];
             if (typeof imported !== 'string') throw new Error(`Import Error: Cannot find '${resolved}' in the IDE workspace. Add the file to the Explorer first.`);
-            result += this.resolveImports(imported, resolved, [...stack, resolved]) + '\n';
+            loaded.add(resolved);
+            result += this.resolveImports(imported, resolved, [...stack, resolved], loaded) + '\n';
         }
         return result + source.slice(cursor);
     }
