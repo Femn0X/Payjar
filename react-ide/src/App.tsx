@@ -203,7 +203,7 @@ export default function App() {
         </div>
 
         <section className="editor-area">
-          {activePath ? <Editor key={activePath} code={activeCode} fileName={activePath} onChange={updateCode} notice={setNotice} /> : (
+          {activePath ? <Editor key={activePath} code={activeCode} fileName={activePath} workspaceFiles={files} onChange={updateCode} notice={setNotice} /> : (
             <div className="welcome-state"><div className="welcome-logo">P</div><h2>Payjar Studio</h2><p>Create or import a file to start coding.</p><button className="primary-button" onClick={createFile}>＋ New file</button></div>
           )}
         </section>
