@@ -3,7 +3,7 @@ import Editor from './components/Editor'
 
 type WorkspaceFiles = Record<string, string>
 const STORAGE_KEY = 'payjar-ide-workspace-v1'
-const starterCode = 'public class main(@self) {\n  let total = 2 + 3;\n  println("Hello from Payjar!");\n  println(total);\n}\n'
+const starterCode = 'import "examples/helpers.pj";\n\npublic class main(@self) {\n  let greeter: Any = new Greeter("Hello");\n  println(greeter.greet("World"));\n  println("6 squared is " + toStr(square(6)));\n}\n'
 
 function loadWorkspace(): WorkspaceFiles {
   try {
@@ -15,7 +15,10 @@ function loadWorkspace(): WorkspaceFiles {
   } catch {
     // Start with the sample project when browser storage is unavailable.
   }
-  return { 'main.pj': starterCode, 'examples/variables.pj': 'public class main(@self) {\n  let name = "Payjar";\n  println("Hello, " + name);\n}\n' }
+  return {
+    'main.pj': starterCode,
+    'examples/helpers.pj': 'public class Greeter(@inner_self) {\n  private let greeting: String;\n\n  public func init(self, greeting: String) -> Null {\n    self.greeting = greeting;\n  }\n\n  public func greet(self, name: String) -> String {\n    return self.greeting + ", " + name + "!";\n  }\n}\n\nfunc square(n: Int) -> Int {\n  return n * n;\n}\n'
+  }
 }
 
 function fileLabel(path: string) {
