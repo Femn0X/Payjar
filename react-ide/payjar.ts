@@ -1073,24 +1073,22 @@ export class Interpreter {
             case '+': return leftVal + rightVal;
             case '-': return leftVal - rightVal;
             case '*': return leftVal * rightVal;
-            case '/': 
+            case '/':
                 if (rightVal === 0) throw new Error("Runtime Error: Division by zero.");
-                // Ensure integer division if both are integers (mimicking Python's // behavior if that was intended for /)
-                if (Number.isInteger(leftVal) && Number.isInteger(rightVal)) {
-                    return Math.trunc(leftVal / rightVal); 
-                }
-                return leftVal / rightVal;
+                // Payjar 1.5 always produces a Float for ordinary division (e.g. 1 / 2 == 0.5).
+                return Number(leftVal) / Number(rightVal);
             case '%':
                 if (rightVal === 0) throw new Error("Runtime Error: Modulo by zero.");
                 return leftVal % rightVal;
-            case '==': return leftVal === rightVal;
-            case '!=': return leftVal !== rightVal;
-            case '<': return leftVal < rightVal;
-            case '>': return leftVal > rightVal;
-            case '<=': return leftVal <= rightVal;
-            case '>=': return leftVal >= rightVal;
-            case 'and': case '&&': return Boolean(leftVal) && Boolean(rightVal);
-            case 'or': case '||': return Boolean(leftVal) || Boolean(rightVal);
+            // The native runtime represents boolean results as integer 1/0.
+            case '==': return leftVal === rightVal ? 1 : 0;
+            case '!=': return leftVal !== rightVal ? 1 : 0;
+            case '<': return leftVal < rightVal ? 1 : 0;
+            case '>': return leftVal > rightVal ? 1 : 0;
+            case '<=': return leftVal <= rightVal ? 1 : 0;
+            case '>=': return leftVal >= rightVal ? 1 : 0;
+            case 'and': case '&&': return Boolean(leftVal) && Boolean(rightVal) ? 1 : 0;
+            case 'or': case '||': return Boolean(leftVal) || Boolean(rightVal) ? 1 : 0;
             default: throw new Error(`Runtime Error: Unsupported binary operator: ${operator}`);
         }
     }
@@ -1098,7 +1096,7 @@ export class Interpreter {
     private visitUnaryOp(node: ASTNode): any {
         const operandVal = this.visit(node.operand);
         const operator = node.operator;
-        if (operator === '!' || operator === 'not') return !Boolean(operandVal);
+        if (operator === '!' || operator === 'not') return Boolean(operandVal) ? 0 : 1;
         if (typeof operandVal !== 'number') throw new Error(`Runtime Error: Unary operator ${operator} applied to non-numeric type.`);
         if (operator === '+') return +operandVal;
         if (operator === '-') return -operandVal;
