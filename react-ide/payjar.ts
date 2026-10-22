@@ -1032,9 +1032,7 @@ export class Interpreter {
 
 // PJRT (PayJar RunTime)
 export class PJRT {
-    constructor(private code: string, private debug: boolean = false, private inputProvider?: (prompt?: string) => string) {
-        this.run_code(debug, inputProvider);
-    }
+    constructor(private code: string, private debug: boolean = false, private inputProvider?: (prompt?: string) => string) {}
 
     public run_code(debug_on: boolean, inputProvider?: (prompt?: string) => string): { tokens: Token[], ast: MainDefinitionNode | null, outputs: string[] } {
         let tokens: Token[] = [];
@@ -1049,12 +1047,12 @@ export class PJRT {
             ast = parser.parse() as MainDefinitionNode;
             if (debug_on) console.log("Parsed AST:", JSON.stringify(ast, null, 2));
 
-            const interpreter = new Interpreter(inputProvider);
+            const interpreter = new Interpreter(inputProvider ?? this.inputProvider);
             interpreter.interpret(ast);
             outputs = interpreter.getOutputs();
             
         } catch (e) {
-            console.error(`Error during PJRT execution:`, e);
+            throw e;
         }
         return { tokens, ast, outputs };
     }
