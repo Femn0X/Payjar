@@ -1,10 +1,13 @@
 export type TokenType =
   | 'PUBLIC' | 'PRIVATE' | 'CLASS' | 'MAIN' | 'SELF' | 'INNERSELF'
-  | 'DEF' | 'PRINT' | 'PASS' | 'LET' | 'CONST' | 'VAR' | 'NEW' | 'READLN' | 'RETURN'
-  | 'IDENTIFIER' | 'STRING_LITERAL' | 'NUMBER' | 'BACKTICK_STRING'
-  | 'PLUS' | 'MINUS' | 'MULTIPLY' | 'DIVIDE' | 'MODULO'
+  | 'DEF' | 'PRINT' | 'PASS' | 'LET' | 'CONST' | 'VAR' | 'NEW' | 'READLN' | 'READI' | 'READF' | 'RETURN'
+  | 'IF' | 'ELSE' | 'WHILE' | 'FOR' | 'IN' | 'RANGE' | 'BREAK' | 'CONTINUE'
+  | 'IMPORT' | 'PACKAGE' | 'ENUM' | 'TRY' | 'EXCEPT' | 'FINALLY' | 'THROW' | 'ASYNC' | 'AWAIT'
+  | 'AND' | 'OR' | 'NOT' | 'AS' | 'INT' | 'FLOAT' | 'STR' | 'NULL' | 'ARRAY' | 'COMPLEX'
+  | 'IDENTIFIER' | 'STRING_LITERAL' | 'NUMBER' | 'FLOAT_LITERAL' | 'IMAGINARY_LITERAL' | 'REGEX_STRING' | 'BACKTICK_STRING'
+  | 'PLUS' | 'MINUS' | 'MULTIPLY' | 'DIVIDE' | 'MODULO' | 'CARET' | 'PLUS_EQUAL' | 'MINUS_EQUAL' | 'PLUS_PLUS' | 'MINUS_MINUS' | 'ARROW'
   | 'EQUAL_EQUAL' | 'NOT_EQUAL' | 'LESS_THAN' | 'GREATER_THAN' | 'LESS_EQUAL' | 'GREATER_EQUAL'
-  | 'EQUAL' | 'LPAREN' | 'RPAREN' | 'LBRACE' | 'RBRACE' | 'COLON' | 'SEMICOLON' | 'AT' | 'COMMA' | 'DOT'
+  | 'EQUAL' | 'LPAREN' | 'RPAREN' | 'LBRACK' | 'RBRACK' | 'LBRACE' | 'RBRACE' | 'COLON' | 'SEMICOLON' | 'AT' | 'COMMA' | 'DOT' | 'AMP' | 'LINE' | 'QUESTION'
   | 'EOF';
 
 export class Token {
@@ -45,11 +48,32 @@ export class Lexer {
   }
 
   private removeComments(text: string): string {
-    // Single-line (//)
-    let cleaned = text.replace(/\/\/.*$/gm, '');
-    // Multi-line (/* ... */)
-    cleaned = cleaned.replace(/\/\*[\s\S]*?\*\//g, '');
-    return cleaned;
+    // Keep comment markers inside quoted strings/template literals intact.
+    let out = '';
+    let quote: string | null = null;
+    for (let i = 0; i < text.length; i++) {
+      const ch = text[i];
+      if (quote !== null) {
+        out += ch;
+        if (ch === '\\' && i + 1 < text.length) out += text[++i];
+        else if (ch === quote) quote = null;
+        continue;
+      }
+      if (ch === '"' || ch === "'" || ch === '`') { quote = ch; out += ch; continue; }
+      if (ch === '/' && text[i + 1] === '/') {
+        while (i < text.length && text[i] !== '\n') i++;
+        if (i < text.length) out += '\n';
+        continue;
+      }
+      if (ch === '/' && text[i + 1] === '*') {
+        i += 2;
+        while (i + 1 < text.length && !(text[i] === '*' && text[i + 1] === '/')) i++;
+        i++;
+        continue;
+      }
+      out += ch;
+    }
+    return out;
   }
 
   private advance(): void {
@@ -86,17 +110,22 @@ export class Lexer {
 
   private stringLiteral(quoteChar: string): string {
     let result = '';
-    this.advance(); // Consume the opening quote
+    this.advance();
     while (this.current_char !== null && this.current_char !== quoteChar) {
-      result += this.current_char;
-      this.advance();
+      if (this.current_char === '\\') {
+        this.advance();
+        if (this.current_char === null) break;
+        const escapes: Record<string, string> = { n: '\n', r: '\r', t: '\t', '0': '\0', '\\': '\\', '"': '"', "'": "'", '`': '`' };
+        result += escapes[this.current_char] ?? this.current_char;
+        this.advance();
+      } else {
+        result += this.current_char;
+        this.advance();
+      }
     }
-    if (this.current_char === quoteChar) {
-      this.advance();
-      return result;
-    } else {
-      throw new Error("Lexer Error: Unterminated string literal");
-    }
+    if (this.current_char !== quoteChar) throw new Error("Lexer Error: Unterminated string literal");
+    this.advance();
+    return result;
   }
 
   private backtickStringLiteral(): string {
@@ -111,34 +140,46 @@ export class Lexer {
       // Identifiers and Keywords
       if (/[a-zA-Z_]/.test(this.current_char)) {
         const id = this.identifier();
+        // Match the keyword vocabulary in src/payjar/lexer.rs.
+        const literalKeywords: Record<string, string> = { true: '1', false: '0', null: '0' };
+        if (id in literalKeywords) return new Token('NUMBER', literalKeywords[id]);
         const keywords: { [key: string]: TokenType } = {
-          'public': 'PUBLIC', 'private': 'PRIVATE', 'class': 'CLASS',
-          'main': 'MAIN', 'self': 'SELF', 'inner_self': 'INNERSELF', 'innerSelf': 'INNERSELF',
-          'func': 'DEF', 'println': 'PRINT', 'pass': 'PASS', 'let': 'LET',
-          'const': 'CONST', 'var': 'VAR', 'NEW': 'NEW', 'readln': 'READLN', 'return': 'RETURN'
+          public: 'PUBLIC', private: 'PRIVATE', class: 'CLASS', enum: 'ENUM',
+          main: 'MAIN', self: 'SELF', inner_self: 'INNERSELF', innerSelf: 'INNERSELF',
+          func: 'DEF', async: 'ASYNC', await: 'AWAIT', println: 'PRINT', printerr: 'PRINT',
+          pass: 'PASS', let: 'LET', const: 'CONST', var: 'VAR', new: 'NEW',
+          readln: 'READLN', readi: 'READI', readf: 'READF', return: 'RETURN',
+          if: 'IF', else: 'ELSE', while: 'WHILE', for: 'FOR', in: 'IN', range: 'RANGE',
+          break: 'BREAK', continue: 'CONTINUE', import: 'IMPORT', package: 'PACKAGE',
+          try: 'TRY', except: 'EXCEPT', finally: 'FINALLY', throw: 'THROW',
+          and: 'AND', or: 'OR', not: 'NOT', as: 'AS',
+          Int: 'INT', Float: 'FLOAT', String: 'STR', Null: 'NULL', Array: 'ARRAY', Complex: 'COMPLEX'
         };
         const type = keywords[id] || 'IDENTIFIER';
         return new Token(type, id);
       }
 
-      // Numbers
+      // Integer, floating-point and imaginary numeric literals.
       if (/[0-9]/.test(this.current_char)) {
         let number = '';
-        while (this.current_char !== null && /[0-9]/.test(this.current_char)) {
-          number += this.current_char;
-          this.advance();
+        while (this.current_char !== null && /[0-9]/.test(this.current_char)) { number += this.current_char; this.advance(); }
+        let type: TokenType = 'NUMBER';
+        if (this.current_char === '.' && this.peek() !== null && /[0-9]/.test(this.peek()!)) {
+          type = 'FLOAT_LITERAL'; number += '.'; this.advance();
+          while (this.current_char !== null && /[0-9]/.test(this.current_char)) { number += this.current_char; this.advance(); }
         }
-        return new Token('NUMBER', number);
+        if (this.current_char === 'i') { type = 'IMAGINARY_LITERAL'; number += 'i'; this.advance(); }
+        return new Token(type, number);
       }
 
-      // Operators and Punctuation (Single and Double Character)
+      // Operators and punctuation; recognize paired forms first.
       if (this.current_char === '=') {
         if (this.peek() === '=') { this.advance(); this.advance(); return new Token('EQUAL_EQUAL', '=='); }
         this.advance(); return new Token('EQUAL', '=');
       }
       if (this.current_char === '!') {
         if (this.peek() === '=') { this.advance(); this.advance(); return new Token('NOT_EQUAL', '!='); }
-        throw new Error(`Lexer Error: Invalid character: ${this.current_char}`);
+        this.advance(); return new Token('NOT', '!');
       }
       if (this.current_char === '<') {
         if (this.peek() === '=') { this.advance(); this.advance(); return new Token('LESS_EQUAL', '<='); }
@@ -148,21 +189,41 @@ export class Lexer {
         if (this.peek() === '=') { this.advance(); this.advance(); return new Token('GREATER_EQUAL', '>='); }
         this.advance(); return new Token('GREATER_THAN', '>');
       }
-
-      if (this.current_char === '+') { this.advance(); return new Token('PLUS', '+'); }
-      if (this.current_char === '-') { this.advance(); return new Token('MINUS', '-'); }
+      if (this.current_char === '+') {
+        if (this.peek() === '=') { this.advance(); this.advance(); return new Token('PLUS_EQUAL', '+='); }
+        if (this.peek() === '+') { this.advance(); this.advance(); return new Token('PLUS_PLUS', '++'); }
+        this.advance(); return new Token('PLUS', '+');
+      }
+      if (this.current_char === '-') {
+        if (this.peek() === '=') { this.advance(); this.advance(); return new Token('MINUS_EQUAL', '-='); }
+        if (this.peek() === '-') { this.advance(); this.advance(); return new Token('MINUS_MINUS', '--'); }
+        if (this.peek() === '>') { this.advance(); this.advance(); return new Token('ARROW', '->'); }
+        this.advance(); return new Token('MINUS', '-');
+      }
+      if (this.current_char === '&') {
+        this.advance(); if (this.current_char === '&') { this.advance(); return new Token('AND', '&&'); }
+        return new Token('AMP', '&');
+      }
+      if (this.current_char === '|') {
+        this.advance(); if (this.current_char === '|') { this.advance(); return new Token('OR', '||'); }
+        return new Token('LINE', '|');
+      }
+      if (this.current_char === '?') { this.advance(); return new Token('QUESTION', '?'); }
+      if (this.current_char === '^') { this.advance(); return new Token('CARET', '^'); }
       if (this.current_char === '*') { this.advance(); return new Token('MULTIPLY', '*'); }
       if (this.current_char === '/') { this.advance(); return new Token('DIVIDE', '/'); }
       if (this.current_char === '%') { this.advance(); return new Token('MODULO', '%'); }
-
       if (this.current_char === '(') { this.advance(); return new Token('LPAREN', '('); }
       if (this.current_char === ')') { this.advance(); return new Token('RPAREN', ')'); }
+      if (this.current_char === '[') { this.advance(); return new Token('LBRACK', '['); }
+      if (this.current_char === ']') { this.advance(); return new Token('RBRACK', ']'); }
       if (this.current_char === '{') { this.advance(); return new Token('LBRACE', '{'); }
       if (this.current_char === '}') { this.advance(); return new Token('RBRACE', '}'); }
       if (this.current_char === ';') { this.advance(); return new Token('SEMICOLON', ';'); }
       if (this.current_char === ',') { this.advance(); return new Token('COMMA', ','); }
       if (this.current_char === '.') { this.advance(); return new Token('DOT', '.'); }
-      if (this.current_char === '@') { this.advance(); return new Token('AT', "@"); }
+      if (this.current_char === ':') { this.advance(); return new Token('COLON', ':'); }
+      if (this.current_char === '@') { this.advance(); return new Token('AT', '@'); }
 
       // String and Backtick Literals
       if (this.current_char === '"' || this.current_char === "'") {
@@ -233,7 +294,11 @@ export class Parser {
     private parseMainBody(): ASTNode[] {
         const statements: ASTNode[] = [];
         while (this.current_token && this.current_token.type !== 'RBRACE') {
-            if (this.current_token.type === 'PRINT') {
+            if (this.current_token.type === 'IF') {
+                statements.push(this.parseIfStatement());
+            } else if (this.current_token.type === 'WHILE') {
+                statements.push(this.parseWhileStatement());
+            } else if (this.current_token.type === 'PRINT') {
                 statements.push(this.parsePrintStatement());
             } else if (['VAR', 'CONST', 'LET'].includes(this.current_token.type)) {
                 statements.push(this.parseVariableDeclaration());
@@ -268,6 +333,43 @@ export class Parser {
         return statements;
     }
     
+    private parseIfStatement(): ASTNode {
+        this.eat('IF');
+        this.eat('LPAREN');
+        const condition = this.parseExpression();
+        this.eat('RPAREN');
+        this.eat('LBRACE');
+        const body = this.parseMainBody();
+        this.eat('RBRACE');
+        let elseBody: ASTNode[] = [];
+        let elseIf: { condition: ASTNode; body: ASTNode[] }[] = [];
+        if (this.current_token?.type === 'ELSE') {
+            this.eat('ELSE');
+            if (this.current_token?.type === 'IF') {
+                const nested = this.parseIfStatement();
+                elseIf.push({ condition: nested.condition, body: nested.body });
+                elseIf.push(...(nested.else_if || []));
+                elseBody = nested.else_body || [];
+            } else {
+                this.eat('LBRACE');
+                elseBody = this.parseMainBody();
+                this.eat('RBRACE');
+            }
+        }
+        return { type: 'if_statement', condition, body, else_if: elseIf, else_body: elseBody };
+    }
+
+    private parseWhileStatement(): ASTNode {
+        this.eat('WHILE');
+        this.eat('LPAREN');
+        const condition = this.parseExpression();
+        this.eat('RPAREN');
+        this.eat('LBRACE');
+        const body = this.parseMainBody();
+        this.eat('RBRACE');
+        return { type: 'while_statement', condition, body };
+    }
+
     // --- Utility Parsing Functions ---
 
     private parsePrintStatement(): ASTNode {
@@ -317,12 +419,32 @@ export class Parser {
 
     // Entry point: Handles comparison (lowest precedence)
     private parseExpression(): ASTNode {
+        return this.parseOrExpression();
+    }
+
+    private parseOrExpression(): ASTNode {
+        let left = this.parseAndExpression();
+        while (this.current_token && this.current_token.type === 'OR') {
+            const operator = this.current_token.value; this.advance();
+            left = { type: "binary_op", operator, left, right: this.parseAndExpression() };
+        }
+        return left;
+    }
+
+    private parseAndExpression(): ASTNode {
+        let left = this.parseComparisonExpression();
+        while (this.current_token && this.current_token.type === 'AND') {
+            const operator = this.current_token.value; this.advance();
+            left = { type: "binary_op", operator, left, right: this.parseComparisonExpression() };
+        }
+        return left;
+    }
+
+    private parseComparisonExpression(): ASTNode {
         let left = this.parseTerm();
         while (this.current_token && ['EQUAL_EQUAL', 'NOT_EQUAL', 'LESS_THAN', 'GREATER_THAN', 'LESS_EQUAL', 'GREATER_EQUAL'].includes(this.current_token.type)) {
-            const operator = this.current_token.value;
-            this.advance();
-            const right = this.parseTerm();
-            left = { type: "binary_op", operator, left, right };
+            const operator = this.current_token.value; this.advance();
+            left = { type: "binary_op", operator, left, right: this.parseTerm() };
         }
         return left;
     }
@@ -342,10 +464,9 @@ export class Parser {
     // Multiplication/Division/Modulo and Unary
     private parseFactor(): ASTNode {
         // Unary Plus/Minus
-        if (this.current_token && ['PLUS', 'MINUS'].includes(this.current_token.type)) {
-            const operator = this.current_token.value;
-            this.advance();
-            const operand = this.parsePrimaryExpression();
+        if (this.current_token && ['PLUS', 'MINUS', 'NOT'].includes(this.current_token.type)) {
+            const operator = this.current_token.value; this.advance();
+            const operand = this.parseFactor();
             return { type: "unary_op", operator, operand };
         }
 
@@ -365,9 +486,10 @@ export class Parser {
             const value = this.current_token!.value;
             this.eat('STRING_LITERAL');
             return { type: "literal", value, data_type: "string" };
-        } else if (this.current_token!.type === 'NUMBER') {
-            const value = parseInt(this.current_token!.value, 10);
-            this.eat('NUMBER');
+        } else if (this.current_token!.type === 'NUMBER' || this.current_token!.type === 'FLOAT_LITERAL') {
+            const tokenType = this.current_token!.type;
+            const value = tokenType === 'FLOAT_LITERAL' ? parseFloat(this.current_token!.value) : parseInt(this.current_token!.value, 10);
+            this.eat(tokenType);
             return { type: "literal", value, data_type: "number" };
         } else if (this.current_token!.type === 'BACKTICK_STRING') {
             const stringContent = this.current_token!.value;
@@ -555,6 +677,8 @@ export class Parser {
                 body.push(this.parseReturnStatement());
             } 
             // The body parsing logic should mirror parseMainBody() for local statements
+            else if (this.current_token.type === 'IF') { body.push(this.parseIfStatement()); }
+            else if (this.current_token.type === 'WHILE') { body.push(this.parseWhileStatement()); }
             else if (this.current_token.type === 'PRINT') {body.push(this.parsePrintStatement());}
             else if (['CONST', 'LET', 'VAR'].includes(this.current_token.type)) {body.push(this.parseVariableDeclaration());}
             else if (this.current_token.type === 'IDENTIFIER') {
@@ -722,6 +846,8 @@ export class Interpreter {
     private visit(node: ASTNode, current_instance: PayJarObject | null = null): any {
         switch (node.type) {
             case "print_statement": return this.visitPrintStatement(node);
+            case "if_statement": return this.visitIfStatement(node, current_instance);
+            case "while_statement": return this.visitWhileStatement(node, current_instance);
             case "readln": return this.visitReadln(node);
             case "variable_declaration": return this.visitVariableDeclaration(node);
             case "assignment_statement": return this.visitAssignmentStatement(node);
@@ -743,6 +869,40 @@ export class Interpreter {
     }
 
     // --- Visit Implementations ---
+
+    private visitIfStatement(node: ASTNode, currentInstance: PayJarObject | null): any {
+        const truthy = Boolean(this.visit(node.condition, currentInstance));
+        if (truthy) {
+            this.push_scope();
+            try { for (const statement of node.body) this.visit(statement, currentInstance); }
+            finally { this.pop_scope(); }
+            return;
+        }
+        for (const branch of node.else_if || []) {
+            if (Boolean(this.visit(branch.condition, currentInstance))) {
+                this.push_scope();
+                try { for (const statement of branch.body) this.visit(statement, currentInstance); }
+                finally { this.pop_scope(); }
+                return;
+            }
+        }
+        if (node.else_body?.length) {
+            this.push_scope();
+            try { for (const statement of node.else_body) this.visit(statement, currentInstance); }
+            finally { this.pop_scope(); }
+        }
+    }
+
+    private visitWhileStatement(node: ASTNode, currentInstance: PayJarObject | null): void {
+        // Guard against a runaway loop locking up the browser tab.
+        let iterations = 0;
+        while (Boolean(this.visit(node.condition, currentInstance))) {
+            if (++iterations > 1_000_000) throw new Error('Runtime Error: Loop iteration limit exceeded (1,000,000).');
+            this.push_scope();
+            try { for (const statement of node.body) this.visit(statement, currentInstance); }
+            finally { this.pop_scope(); }
+        }
+    }
 
     private visitPrintStatement(node: ASTNode): void {
         const valueToPrint = this.visit(node.expression);
@@ -992,34 +1152,34 @@ export class Interpreter {
             case '+': return leftVal + rightVal;
             case '-': return leftVal - rightVal;
             case '*': return leftVal * rightVal;
-            case '/': 
+            case '/':
                 if (rightVal === 0) throw new Error("Runtime Error: Division by zero.");
-                // Ensure integer division if both are integers (mimicking Python's // behavior if that was intended for /)
-                if (Number.isInteger(leftVal) && Number.isInteger(rightVal)) {
-                    return Math.trunc(leftVal / rightVal); 
-                }
-                return leftVal / rightVal;
-            case '%':
-                if (rightVal === 0) throw new Error("Runtime Error: Modulo by zero.");
-                return leftVal % rightVal;
-            case '==': return leftVal === rightVal;
-            case '!=': return leftVal !== rightVal;
-            case '<': return leftVal < rightVal;
-            case '>': return leftVal > rightVal;
-            case '<=': return leftVal <= rightVal;
-            case '>=': return leftVal >= rightVal;
+                // Payjar 1.5 always produces a Float for ordinary division (e.g. 1 / 2 == 0.5).
+                return Number(leftVal) / Number(rightVal);
+            case '%': {
+                const dividend = Math.trunc(Number(leftVal));
+                const divisor = Math.trunc(Number(rightVal));
+                if (divisor === 0) throw new Error("Runtime Error: Modulo by zero.");
+                return dividend % divisor;
+            }
+            // The native runtime represents boolean results as integer 1/0.
+            case '==': return leftVal === rightVal ? 1 : 0;
+            case '!=': return leftVal !== rightVal ? 1 : 0;
+            case '<': return leftVal < rightVal ? 1 : 0;
+            case '>': return leftVal > rightVal ? 1 : 0;
+            case '<=': return leftVal <= rightVal ? 1 : 0;
+            case '>=': return leftVal >= rightVal ? 1 : 0;
+            case 'and': case '&&': return Boolean(leftVal) && Boolean(rightVal) ? 1 : 0;
+            case 'or': case '||': return Boolean(leftVal) || Boolean(rightVal) ? 1 : 0;
             default: throw new Error(`Runtime Error: Unsupported binary operator: ${operator}`);
         }
     }
 
-    private visitUnaryOp(node: ASTNode): number {
+    private visitUnaryOp(node: ASTNode): any {
         const operandVal = this.visit(node.operand);
         const operator = node.operator;
-
-        if (typeof operandVal !== 'number') {
-            throw new Error(`Runtime Error: Unary operator ${operator} applied to non-numeric type.`);
-        }
-
+        if (operator === '!' || operator === 'not') return Boolean(operandVal) ? 0 : 1;
+        if (typeof operandVal !== 'number') throw new Error(`Runtime Error: Unary operator ${operator} applied to non-numeric type.`);
         if (operator === '+') return +operandVal;
         if (operator === '-') return -operandVal;
         throw new Error(`Runtime Error: Unsupported unary operator: ${operator}`);

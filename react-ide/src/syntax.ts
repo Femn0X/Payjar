@@ -3,18 +3,26 @@ import * as monaco from 'monaco-editor'
 export const PayjarTokens: monaco.languages.IMonarchLanguage = {
   defaultToken: '',
   keywords: [
-    'func', 'public', 'private', 'class', 'new', 'self', 'const', 'var',
-    'let', 'return', 'inner_self', 'main', 'println', 'readln', 'pass',
+    'func', 'public', 'private', 'class', 'enum', 'new', 'self', 'const', 'var',
+    'let', 'return', 'inner_self', 'innerSelf', 'main', 'println', 'printerr',
+    'readln', 'readi', 'readf', 'pass', 'if', 'else', 'while', 'for', 'in',
+    'range', 'break', 'continue', 'import', 'package', 'try', 'except',
+    'finally', 'throw', 'async', 'await', 'and', 'or', 'not', 'as',
+    'Int', 'Float', 'String', 'Null', 'Array', 'Complex', 'true', 'false', 'null',
   ],
   tokenizer: {
     root: [
       [/\/\/.*$/, 'comment'],
       [/\/\*/, { token: 'comment', next: '@comment' }],
-      [/[a-zA-Z_][a-zA-Z0-9_]*/, { cases: { '@keywords': 'keyword', '@default': 'identifier' } }],
-      [/\d+/, 'number'],
+      [/\`([^\`\\]|\\.)*\`/, 'string'],
       [/"([^"\\]|\\.)*"/, 'string'],
       [/'([^'\\]|\\.)*'/, 'string'],
-      [/[+*\/%=!<>&|~-]+/, 'operator'],
+      [/\d+\.\d+/, 'number.float'],
+      [/\d+i/, 'number.complex'],
+      [/\d+/, 'number'],
+      [/[a-zA-Z_][a-zA-Z0-9_]*/, { cases: { '@keywords': 'keyword', '@default': 'identifier' } }],
+      [/\+\+|--|\+=|-=|->|==|!=|<=|>=|&&|\|\|/, 'operator'],
+      [/[+*/%!=<>~&|^?-]/, 'operator'],
       [/[{}()\[\]]/, '@brackets'],
       [/[;,.@:]/, 'delimiter'],
     ],
@@ -42,6 +50,7 @@ export const PayjarConfig: monaco.languages.LanguageConfiguration = {
     { open: '[', close: ']' },
     { open: '"', close: '"' },
     { open: "'", close: "'" },
+    { open: '`', close: '`' },
   ],
   surroundingPairs: [
     { open: '(', close: ')' },
@@ -49,5 +58,6 @@ export const PayjarConfig: monaco.languages.LanguageConfiguration = {
     { open: '[', close: ']' },
     { open: '"', close: '"' },
     { open: "'", close: "'" },
+    { open: '`', close: '`' },
   ],
 }
