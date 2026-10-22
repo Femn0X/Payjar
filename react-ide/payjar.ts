@@ -1082,7 +1082,7 @@ export class PJS {
         }
 
         // Use the PJRT with the provider so READLN can be satisfied
-        new PJRT(code, true, provider);
+        new PJRT(code, true, provider).run_code(true, provider);
         console.log(`--- Execution Complete ---`);
     }
 }
