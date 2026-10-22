@@ -33,7 +33,23 @@ The Tauri development command remains \`npm run tauri:dev\` and requires the Rus
 - Import source files, export an individual file, and import/export a JSON workspace backup
 - Responsive dark interface
 
-## Workspace and runtime notes
+## Imports and Java-like declarations
+
+The browser runtime supports workspace-relative source imports and the declaration style used in the repository examples:
+
+```payjar
+import "lib/greeter.pj";
+
+public class main(@self) {
+    let greeter: Any = new Greeter("Hello");
+    println(greeter.greet("World"));
+    println("6 squared is " + toStr(square(6)));
+}
+```
+
+Imported files should contain top-level `func` declarations and/or top-level classes, not another `main` entry point. Import paths are relative to the importing file, accept an optional `.pj` extension, and must refer to files already present in the Explorer. Circular imports and paths escaping the workspace root are rejected. The browser runtime supports typed parameters, return types, typed local variables, class fields, `self`, `new Class(...)`, and method calls; type annotations are currently parsed for compatibility but are not runtime type checks. Visibility keywords are accepted syntactically, but access control is not enforced by the browser runtime.
+
+
 
 - The browser IDE stores workspace text in the current browser profile. Export a workspace JSON backup to move it to another browser or device.
 - Importing source files copies their text into the browser workspace; it does not connect to or modify a GitHub repository or local disk.

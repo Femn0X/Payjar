@@ -277,18 +277,36 @@ export class Parser {
     }
 
     private parseMain(): MainDefinitionNode {
-        this.eat('PUBLIC');
-        this.eat('CLASS');
-        const className = this.current_token!.value;
-        this.eat('MAIN');
-        this.eat('LPAREN');
-        this.eat('AT');
-        this.eat('SELF');
-        this.eat('RPAREN');
-        this.eat('LBRACE');
-        const mainBody = this.parseMainBody();
-        this.eat('RBRACE');
-        return { type: "main_definition", name: className, body: mainBody };
+        const declarations: ASTNode[] = [];
+        let main: MainDefinitionNode | null = null;
+        while (this.current_token) {
+            if (this.current_token.type === 'DEF') {
+                declarations.push(this.parseFunctionDefinition(false));
+            } else if (this.current_token.type === 'PUBLIC' || this.current_token.type === 'PRIVATE' || this.current_token.type === 'CLASS') {
+                const isMain = (this.current_token.type === 'PUBLIC' &&
+                    this.tokens[this.token_index + 1]?.type === 'CLASS' &&
+                    this.tokens[this.token_index + 2]?.type === 'MAIN') ||
+                    (this.current_token.type === 'CLASS' && this.tokens[this.token_index + 1]?.type === 'MAIN');
+                if (isMain) {
+                    if (main) throw new Error("Syntax Error: Only one 'public class main(@self)' entry point is allowed.");
+                    if (this.current_token.type === 'PUBLIC') this.eat('PUBLIC');
+                    this.eat('CLASS');
+                    this.eat('MAIN');
+                    this.eat('LPAREN'); this.eat('AT'); this.eat('SELF'); this.eat('RPAREN');
+                    this.eat('LBRACE');
+                    const body = this.parseMainBody();
+                    this.eat('RBRACE');
+                    main = { type: "main_definition", name: 'main', body };
+                } else {
+                    declarations.push(this.parseClassDefinition());
+                }
+            } else {
+                throw new Error(`Syntax Error: Expected a top-level function, class, or 'public class main(@self)', got ${this.current_token.type}.`);
+            }
+        }
+        if (!main) throw new Error("Syntax Error: Missing 'public class main(@self)' entry point.");
+        // Hoist top-level functions and classes before the entry-point statements.
+        return { ...main, body: [...declarations, ...main.body] };
     }
 
     private parseMainBody(): ASTNode[] {
@@ -306,6 +324,11 @@ export class Parser {
                 statements.push(this.parseFunctionDefinition());
             } else if (this.current_token.type === 'PUBLIC' || this.current_token.type === 'CLASS') {
                 statements.push(this.parseClassDefinition());
+            } else if (this.current_token.type === 'SELF') {
+                const nextToken = this.tokens[this.token_index + 1];
+                if (nextToken?.type !== 'DOT') throw new Error("Syntax Error: 'self' must access a class member.");
+                this.eat('SELF');
+                statements.push(this.parseMemberAccess({ type: "variable_access", name: "self" }));
             } else if (this.current_token.type === 'IDENTIFIER') {
                 const nextToken = this.tokens[this.token_index + 1];
                 if (nextToken?.type === 'EQUAL') {
@@ -400,6 +423,11 @@ export class Parser {
         this.advance();
         const variableName = this.current_token!.value;
         this.eat('IDENTIFIER');
+        if (this.current_token?.type === 'COLON') {
+            this.eat('COLON');
+            if (!this.current_token) throw new Error("Syntax Error: Expected variable type after ':'.");
+            this.advance(); // Type annotation is informational in the browser runtime.
+        }
         this.eat('EQUAL');
         const valueExpression = this.parseExpression();
         this.eat('SEMICOLON');
@@ -509,6 +537,10 @@ export class Parser {
                 }
             }
             return { type: "template_string", parts: templateParts };
+        } else if (this.current_token!.type === 'SELF') {
+            this.eat('SELF');
+            const selfExpr: ASTNode = { type: "variable_access", name: "self" };
+            return this.current_token?.type === 'DOT' ? this.parseMemberAccess(selfExpr) : selfExpr;
         } else if (this.current_token!.type === 'IDENTIFIER') {
             const name = this.current_token!.value;
             this.advance();
@@ -597,8 +629,8 @@ export class Parser {
     // --- Class/Function Definition Logic (methods omitted for space, but follow Python logic) ---
     // The Python implementation for parse_class_definition, parse_function_definition, etc., 
     // are directly convertible but are lengthy. Their structures remain the same.
-    private parseClassDefinition(): ASTNode { 
-        if (this.current_token?.type === 'PUBLIC') this.eat('PUBLIC');
+    private parseClassDefinition(): ASTNode {
+        if (this.current_token?.type === 'PUBLIC' || this.current_token?.type === 'PRIVATE') this.advance();
         this.eat('CLASS');
         const className = this.current_token!.value;
         this.eat('IDENTIFIER');
@@ -614,7 +646,18 @@ export class Parser {
         let constructor: ASTNode | null = null;
         
         while (this.current_token && this.current_token.type !== 'RBRACE') {
-            if (['CONST', 'LET'].includes(this.current_token.type)) {
+            if (this.current_token.type === 'PUBLIC' || this.current_token.type === 'PRIVATE') {
+                this.advance(); // Visibility modifier; the browser runtime currently enforces syntax, not access control.
+                if (this.current_token?.type === 'DEF') {
+                    const methodDef = this.parseFunctionDefinition(true);
+                    if (methodDef.name === 'init') constructor = methodDef;
+                    else methods.push(methodDef);
+                } else if (['CONST', 'LET', 'VAR'].includes(this.current_token?.type ?? '')) {
+                    members.push(this.parseClassFieldDeclaration());
+                } else {
+                    throw new Error(`Syntax Error: Expected a field or method after visibility modifier, got ${this.current_token?.type ?? 'EOF'}.`);
+                }
+            } else if (['CONST', 'LET', 'VAR'].includes(this.current_token.type)) {
                 members.push(this.parseClassFieldDeclaration());
             } else if (this.current_token.type === 'DEF') {
                 const methodDef = this.parseFunctionDefinition(true); // is_method = true
@@ -633,9 +676,14 @@ export class Parser {
 
     private parseClassFieldDeclaration(): ASTNode {
         const declarationType = this.current_token!.type;
-        this.advance(); // Consume CONST or LET
+        this.advance(); // Consume declaration keyword
         const fieldName = this.current_token!.value;
         this.eat('IDENTIFIER');
+        if (this.current_token?.type === 'COLON') {
+            this.eat('COLON');
+            if (!this.current_token) throw new Error("Syntax Error: Expected field type after ':'.");
+            this.advance(); // Type annotation is currently informational in the browser runtime.
+        }
         let initialValue: ASTNode | null = null;
         if (this.current_token && this.current_token.type === 'EQUAL') {
             this.eat('EQUAL');
@@ -653,22 +701,31 @@ export class Parser {
 
         const parameters: string[] = [];
         if (this.current_token && this.current_token.type !== 'RPAREN') {
-            if (isMethod && this.current_token.type === 'SELF') {
-                parameters.push(this.current_token.value);
-                this.eat('SELF');
-            } else if (!isMethod && this.current_token.type === 'SELF') {
-                throw new Error("Syntax Error: The 'self' parameter is only allowed in class method definitions.");
-            } else {
-                parameters.push(this.current_token.value);
-                this.eat('IDENTIFIER');
-            }
-            while (this.current_token && this.current_token.type === 'COMMA') {
-                this.eat('COMMA');
-                parameters.push(this.current_token.value);
-                this.eat('IDENTIFIER');
+            while (this.current_token && this.current_token.type !== 'RPAREN') {
+                if (this.current_token.type === 'SELF') {
+                    if (!isMethod) throw new Error("Syntax Error: The 'self' parameter is only allowed in class method definitions.");
+                    parameters.push('self');
+                    this.eat('SELF');
+                } else {
+                    if (this.current_token.type !== 'IDENTIFIER') throw new Error(`Syntax Error: Expected parameter name, got ${this.current_token.type}.`);
+                    parameters.push(this.current_token.value);
+                    this.eat('IDENTIFIER');
+                    if (this.current_token?.type === 'COLON') {
+                        this.eat('COLON');
+                        if (!this.current_token) throw new Error("Syntax Error: Expected parameter type after ':'.");
+                        this.advance(); // Type annotation is informational in the browser runtime.
+                    }
+                }
+                if (this.current_token?.type === 'COMMA') this.eat('COMMA');
+                else break;
             }
         }
         this.eat('RPAREN');
+        if (this.current_token?.type === 'ARROW') {
+            this.eat('ARROW');
+            if (!this.current_token) throw new Error("Syntax Error: Expected return type after '->'.");
+            this.advance(); // Return type annotation is informational in the browser runtime.
+        }
         this.eat('LBRACE');
 
         const body: ASTNode[] = [];
@@ -681,6 +738,12 @@ export class Parser {
             else if (this.current_token.type === 'WHILE') { body.push(this.parseWhileStatement()); }
             else if (this.current_token.type === 'PRINT') {body.push(this.parsePrintStatement());}
             else if (['CONST', 'LET', 'VAR'].includes(this.current_token.type)) {body.push(this.parseVariableDeclaration());}
+            else if (this.current_token.type === 'SELF') {
+                const nextToken = this.tokens[this.token_index + 1];
+                if (nextToken?.type !== 'DOT') throw new Error("Syntax Error: 'self' must access a class member.");
+                this.eat('SELF');
+                body.push(this.parseMemberAccess({ type: "variable_access", name: "self" }));
+            }
             else if (this.current_token.type === 'IDENTIFIER') {
                 const nextToken = this.tokens[this.token_index + 1];
                 if (nextToken?.type === 'EQUAL') {body.push(this.parseAssignmentStatement());}
@@ -973,6 +1036,23 @@ export class Interpreter {
     
     private visitFunctionCall(node: ASTNode, currentInstance: PayJarObject | null): any {
         const funcName = node.name;
+        const providedArgsNodes = node.arguments as ASTNode[];
+        if (funcName === 'toStr') {
+            if (providedArgsNodes.length !== 1) throw new Error("Runtime Error: toStr expects exactly one argument.");
+            return String(this.visit(providedArgsNodes[0], currentInstance));
+        }
+        if (funcName === 'toInt') {
+            if (providedArgsNodes.length !== 1) throw new Error("Runtime Error: toInt expects exactly one argument.");
+            const value = Number(this.visit(providedArgsNodes[0], currentInstance));
+            if (!Number.isFinite(value)) throw new Error("Runtime Error: toInt received a non-numeric value.");
+            return Math.trunc(value);
+        }
+        if (funcName === 'toFloat') {
+            if (providedArgsNodes.length !== 1) throw new Error("Runtime Error: toFloat expects exactly one argument.");
+            const value = Number(this.visit(providedArgsNodes[0], currentInstance));
+            if (!Number.isFinite(value)) throw new Error("Runtime Error: toFloat received a non-numeric value.");
+            return value;
+        }
         let funcDefinition: ASTNode | null = null;
 
         if (currentInstance && funcName in currentInstance.methods) {
@@ -984,8 +1064,6 @@ export class Interpreter {
         }
 
         const expectedParams = funcDefinition!.parameters as string[];
-        const providedArgsNodes = node.arguments as ASTNode[];
-
         const isMethod = funcDefinition!.is_method;
         const paramOffset = (isMethod && expectedParams[0] === 'self') ? 1 : 0;
         const expectedArgsCount = expectedParams.length - paramOffset;
@@ -1192,14 +1270,52 @@ export class Interpreter {
 
 // PJRT (PayJar RunTime)
 export class PJRT {
-    constructor(private code: string, private debug: boolean = false, private inputProvider?: (prompt?: string) => string) {}
+    constructor(
+        private code: string,
+        private debug: boolean = false,
+        private inputProvider?: (prompt?: string) => string,
+        private workspaceFiles: Record<string, string> = {},
+        private entryPath: string = 'main.pj'
+    ) {}
+
+    private resolveImports(source: string, fromPath: string, stack: string[] = [], loaded: Set<string> = new Set()): string {
+        const directory = fromPath.includes('/') ? fromPath.slice(0, fromPath.lastIndexOf('/') + 1) : '';
+        const importPattern = /^\s*import\s+(?:"([^"]+)"|'([^']+)'|([A-Za-z0-9_./-]+))\s*;?\s*$/gm;
+        let result = '';
+        let cursor = 0;
+        let match: RegExpExecArray | null;
+        while ((match = importPattern.exec(source)) !== null) {
+            result += source.slice(cursor, match.index);
+            cursor = match.index + match[0].length;
+            const requested = (match[1] || match[2] || match[3] || '').replace(/\\/g, '/');
+            const combined = requested.startsWith('/') ? requested.slice(1) : directory + requested;
+            const parts: string[] = [];
+            for (const part of combined.split('/')) {
+                if (!part || part === '.') continue;
+                if (part === '..') {
+                    if (!parts.length) throw new Error(`Import Error: '${requested}' escapes the workspace root.`);
+                    parts.pop();
+                } else parts.push(part);
+            }
+            let resolved = parts.join('/');
+            if (!/\.[A-Za-z0-9]+$/.test(resolved)) resolved += '.pj';
+            if (stack.includes(resolved)) throw new Error(`Import Error: Circular import detected: ${[...stack, resolved].join(' -> ')}`);
+            if (loaded.has(resolved)) { result += '\n'; continue; }
+            const imported = this.workspaceFiles[resolved];
+            if (typeof imported !== 'string') throw new Error(`Import Error: Cannot find '${resolved}' in the IDE workspace. Add the file to the Explorer first.`);
+            loaded.add(resolved);
+            result += this.resolveImports(imported, resolved, [...stack, resolved], loaded) + '\n';
+        }
+        return result + source.slice(cursor);
+    }
 
     public run_code(debug_on: boolean, inputProvider?: (prompt?: string) => string): { tokens: Token[], ast: MainDefinitionNode | null, outputs: string[] } {
         let tokens: Token[] = [];
         let ast: MainDefinitionNode | null = null;
         let outputs: string[] = [];
         try {
-            const lexer = new Lexer(this.code);
+            const source = this.resolveImports(this.code, this.entryPath, [this.entryPath]);
+            const lexer = new Lexer(source);
             tokens = lexer.tokenize();
             if (debug_on) console.log("Lexer Tokens:", tokens.map(t => t.toString()));
 

@@ -8,7 +8,7 @@ export const PayjarTokens: monaco.languages.IMonarchLanguage = {
     'readln', 'readi', 'readf', 'pass', 'if', 'else', 'while', 'for', 'in',
     'range', 'break', 'continue', 'import', 'package', 'try', 'except',
     'finally', 'throw', 'async', 'await', 'and', 'or', 'not', 'as',
-    'Int', 'Float', 'String', 'Null', 'Array', 'Complex', 'true', 'false', 'null',
+    'Int', 'Float', 'String', 'Null', 'Array', 'Complex', 'Any', 'true', 'false', 'null',
   ],
   tokenizer: {
     root: [
