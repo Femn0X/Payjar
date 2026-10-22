@@ -324,6 +324,11 @@ export class Parser {
                 statements.push(this.parseFunctionDefinition());
             } else if (this.current_token.type === 'PUBLIC' || this.current_token.type === 'CLASS') {
                 statements.push(this.parseClassDefinition());
+            } else if (this.current_token.type === 'SELF') {
+                const nextToken = this.tokens[this.token_index + 1];
+                if (nextToken?.type !== 'DOT') throw new Error("Syntax Error: 'self' must access a class member.");
+                this.eat('SELF');
+                statements.push(this.parseMemberAccess({ type: "variable_access", name: "self" }));
             } else if (this.current_token.type === 'IDENTIFIER') {
                 const nextToken = this.tokens[this.token_index + 1];
                 if (nextToken?.type === 'EQUAL') {
@@ -527,6 +532,9 @@ export class Parser {
                 }
             }
             return { type: "template_string", parts: templateParts };
+        } else if (this.current_token!.type === 'SELF') {
+            this.eat('SELF');
+            return { type: "variable_access", name: "self" };
         } else if (this.current_token!.type === 'IDENTIFIER') {
             const name = this.current_token!.value;
             this.advance();
@@ -724,6 +732,12 @@ export class Parser {
             else if (this.current_token.type === 'WHILE') { body.push(this.parseWhileStatement()); }
             else if (this.current_token.type === 'PRINT') {body.push(this.parsePrintStatement());}
             else if (['CONST', 'LET', 'VAR'].includes(this.current_token.type)) {body.push(this.parseVariableDeclaration());}
+            else if (this.current_token.type === 'SELF') {
+                const nextToken = this.tokens[this.token_index + 1];
+                if (nextToken?.type !== 'DOT') throw new Error("Syntax Error: 'self' must access a class member.");
+                this.eat('SELF');
+                body.push(this.parseMemberAccess({ type: "variable_access", name: "self" }));
+            }
             else if (this.current_token.type === 'IDENTIFIER') {
                 const nextToken = this.tokens[this.token_index + 1];
                 if (nextToken?.type === 'EQUAL') {body.push(this.parseAssignmentStatement());}
