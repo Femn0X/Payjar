@@ -77,7 +77,7 @@ export default function CodeEditor({ code, fileName, workspaceFiles, onChange, n
     const onRun = () => runCode()
     window.addEventListener('payjar:run', onRun)
     return () => window.removeEventListener('payjar:run', onRun)
-  }, [code, fileName, running])
+  }, [code, fileName, running, workspaceFiles])
 
   function clearOutput() {
     setOutput([])
