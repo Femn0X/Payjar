@@ -1156,9 +1156,12 @@ export class Interpreter {
                 if (rightVal === 0) throw new Error("Runtime Error: Division by zero.");
                 // Payjar 1.5 always produces a Float for ordinary division (e.g. 1 / 2 == 0.5).
                 return Number(leftVal) / Number(rightVal);
-            case '%':
-                if (rightVal === 0) throw new Error("Runtime Error: Modulo by zero.");
-                return leftVal % rightVal;
+            case '%': {
+                const dividend = Math.trunc(Number(leftVal));
+                const divisor = Math.trunc(Number(rightVal));
+                if (divisor === 0) throw new Error("Runtime Error: Modulo by zero.");
+                return dividend % divisor;
+            }
             // The native runtime represents boolean results as integer 1/0.
             case '==': return leftVal === rightVal ? 1 : 0;
             case '!=': return leftVal !== rightVal ? 1 : 0;
