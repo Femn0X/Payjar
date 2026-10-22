@@ -6,11 +6,12 @@ import { PayjarTokens, PayjarConfig } from '../syntax'
 type EditorProps = {
   code: string
   fileName: string
+  workspaceFiles: Record<string, string>
   onChange: (value: string) => void
   notice: (message: string) => void
 }
 
-export default function CodeEditor({ code, fileName, onChange, notice }: EditorProps) {
+export default function CodeEditor({ code, fileName, workspaceFiles, onChange, notice }: EditorProps) {
   const editorRef = useRef<any>(null)
   const [output, setOutput] = useState<string[]>([])
   const [activePanel, setActivePanel] = useState<'terminal' | 'problems'>('terminal')
@@ -56,7 +57,7 @@ export default function CodeEditor({ code, fileName, onChange, notice }: EditorP
     setOutput([])
     notice('Running ' + fileName + '…')
     try {
-      const runtime = new PJRT(code, false)
+      const runtime = new PJRT(code, false, undefined, workspaceFiles, fileName)
       const result = runtime.run_code(false, (prompt?: string) => {
         const answer = window.prompt(prompt || 'Payjar program input:')
         return answer === null ? '' : answer
