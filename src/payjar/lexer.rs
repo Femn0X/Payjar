@@ -168,28 +168,46 @@ impl<'a> Lexer<'a> {
             return Token::new(TokenType::Number, s);
         }
 
-        // quoted strings
+        // quoted strings — decode complete UTF-8 characters, not individual bytes
         if c == b'"' || c == b'\'' {
             let quote = c;
             self.advance();
             let mut buf = String::new();
             while self.pos < self.src.len() && self.cur() != quote {
-                let ch = self.cur();
-                if ch == b'\\' {
+                if self.cur() == b'\\' {
                     self.advance();
+                    if self.pos >= self.src.len() {
+                        buf.push('\\');
+                        break;
+                    }
                     match self.cur() {
-                        b'n'  => buf.push('\n'),
-                        b't'  => buf.push('\t'),
-                        b'r'  => buf.push('\r'),
-                        b'\\' => buf.push('\\'),
-                        b'"'  => buf.push('"'),
-                        b'\'' => buf.push('\''),
-                        esc   => { buf.push('\\'); buf.push(esc as char); }
+                        b'n'  => { buf.push('\n'); self.advance(); }
+                        b't'  => { buf.push('\t'); self.advance(); }
+                        b'r'  => { buf.push('\r'); self.advance(); }
+                        b'\\' => { buf.push('\\'); self.advance(); }
+                        b'"'  => { buf.push('"'); self.advance(); }
+                        b'\'' => { buf.push('\''); self.advance(); }
+                        _ => {
+                            // Preserve unknown escapes without corrupting Unicode.
+                            buf.push('\\');
+                            let ch = std::str::from_utf8(&self.src[self.pos..])
+                                .expect("lexer source must be valid UTF-8")
+                                .chars()
+                                .next()
+                                .expect("position is before end of source");
+                            buf.push(ch);
+                            self.pos += ch.len_utf8();
+                        }
                     }
                 } else {
-                    buf.push(ch as char);
+                    let ch = std::str::from_utf8(&self.src[self.pos..])
+                        .expect("lexer source must be valid UTF-8")
+                        .chars()
+                        .next()
+                        .expect("position is before end of source");
+                    buf.push(ch);
+                    self.pos += ch.len_utf8();
                 }
-                self.advance();
             }
             if self.pos < self.src.len() { self.advance(); }
             return Token::new(TokenType::StringLiteral, buf);
@@ -216,8 +234,13 @@ impl<'a> Lexer<'a> {
                 self.advance();
                 let mut buf = String::new();
                 while self.pos < self.src.len() && self.cur() != quote {
-                    buf.push(self.cur() as char);
-                    self.advance();
+                    let ch = std::str::from_utf8(&self.src[self.pos..])
+                        .expect("lexer source must be valid UTF-8")
+                        .chars()
+                        .next()
+                        .expect("position is before end of source");
+                    buf.push(ch);
+                    self.pos += ch.len_utf8();
                 }
                 if self.pos < self.src.len() { self.advance(); }
                 return Token::new(TokenType::RegexString, buf);
