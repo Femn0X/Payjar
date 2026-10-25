@@ -122,7 +122,7 @@
     },
     "builtin-functions": {
       "name": "support.function.builtin.pj",
-      "match": "\\b(println|printerr|readln|readi|readf|print|toStr|toInt|toFloat|len|strLen|charAt|strSlice|strContains|strReplace|strSplit|strTrim|strStartsWith|strEndsWith|readFile|writeFile|appendFile|exit|listLen|range|typeOf|pow|match)\\b(?=\\s*\\()"
+      "match": "\\b(println|printerr|readln|readi|readf|print|toStr|toInt|toFloat|len|strLen|charAt|strSlice|strContains|strReplace|strSplit|strTrim|strStartsWith|strEndsWith|readFile|writeFile|appendFile|exit|listLen|range|typeOf|dir|pow|match)\\b(?=\\s*\\()"
     },
     "builtin-modules": {
       "name": "support.class.pj",

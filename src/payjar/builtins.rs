@@ -605,6 +605,48 @@ pub fn eval_builtin_or_func(
     self_obj: Option<Rc<RefCell<PJObject>>>,
 ) -> Value {
     match name {
+        // Python-inspired dir(): list visible names, or fields/methods of an object.
+        "dir" => {
+            if args.len() > 1 {
+                eprintln!("dir() takes 0 or 1 argument");
+                process::exit(1);
+            }
+            let mut names: Vec<String> = if args.is_empty() {
+                let mut visible = std::collections::BTreeSet::new();
+                visible.extend(super::Scope::visible_names(&env.scope));
+                visible.extend(env.funcs.keys().cloned());
+                visible.extend(env.classes.keys().cloned());
+                visible.extend(env.enums.keys().cloned());
+                // Builtins are dispatched directly rather than stored in Env::funcs.
+                visible.extend([
+                    "abs", "appendFile", "ceil", "charAt", "clamp", "cos", "dir",
+                    "exit", "floor", "indexOf", "len", "listLen", "max", "min",
+                    "pow", "print", "printerr", "println", "range", "readFile",
+                    "readf", "readi", "readln", "round", "sin", "sqrt", "strContains",
+                    "strEndsWith", "strLen", "strSlice", "strSplit", "strStartsWith",
+                    "strTrim", "toFloat", "toInt", "toStr", "typeOf", "writeFile",
+                ].into_iter().map(str::to_string));
+                visible.into_iter().collect()
+            } else {
+                match &args[0] {
+                    Value::Object(object) => {
+                        let object = object.borrow();
+                        let mut names = std::collections::BTreeSet::new();
+                        names.extend(object.fields.iter().map(|field| field.name.clone()));
+                        names.extend(object.class_def.methods.iter().filter_map(|method| method.name.clone()));
+                        names.into_iter().collect()
+                    }
+                    Value::Map(map) => {
+                        let map = map.borrow();
+                        map.keys().cloned().collect::<std::collections::BTreeSet<_>>().into_iter().collect()
+                    }
+                    // Primitive and list values have no per-instance named attributes in PayJar.
+                    _ => Vec::new(),
+                }
+            };
+            names.sort();
+            Value::List(Rc::new(RefCell::new(names.into_iter().map(Value::Str).collect())))
+        }
         "toStr"   => { need!(args,1); Value::Str(args[0].to_string_repr()) }
         "toInt"   => { need!(args,1); match &args[0]{ Value::Str(s)=>Value::Int(s.trim().parse().unwrap_or(0)), v=>Value::Int(v.as_int()) } }
         "toFloat" => { need!(args,1); Value::Float(args[0].as_float()) }

@@ -1,0 +1,27 @@
+// Python-inspired dir() examples.
+//
+// Run with: cargo run -- examples/dir.pj
+
+public class Sample(@inner_self) {
+    private let label: String;
+
+    public func init(self, label: String) -> Null {
+        self.label = label;
+    }
+
+    public func describe(self) -> String {
+        return self.label;
+    }
+}
+
+public class main(@self) {
+    let answer = 42;
+    let greeting = "hello";
+
+    // Lists visible names and globally available built-ins.
+    println("Visible names: " + toStr(dir()));
+
+    // dir(object) lists that instance's fields and methods.
+    let sample: Any = new Sample("demo");
+    println("Sample members: " + toStr(dir(sample)));
+}

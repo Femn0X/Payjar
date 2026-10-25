@@ -56,7 +56,7 @@ The language is intentionally small but expressive enough to build non‑trivial
 | `appendFile` | Append to a file |
 | `exit` | Exit the program |
 | `range` | Generate a numeric range |
-| `typeOf` | Get the type of a value |
+| `typeOf` | Get the type of a value |\n| `dir` | List visible names or an object's fields and methods |
 | `indexOf` | Get index of element in list/string |
 | `len` | Get length of list or string |
 | `pow` | Raise a number to a power |

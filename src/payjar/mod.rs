@@ -474,6 +474,20 @@ impl Scope {
             }
         }
     }
+    /// Return all variable names visible from this scope, including parent scopes.
+    /// Names are deduplicated (child bindings shadow parent bindings) and sorted.
+    pub fn visible_names(scope: &Rc<RefCell<Scope>>) -> Vec<String> {
+        let mut names = std::collections::HashSet::new();
+        let mut cur = Some(Rc::clone(scope));
+        while let Some(current) = cur {
+            let s = current.borrow();
+            names.extend(s.vars.keys().cloned());
+            cur = s.parent.as_ref().map(Rc::clone);
+        }
+        let mut names: Vec<String> = names.into_iter().collect();
+        names.sort();
+        names
+    }
 }
 
 // ============================================================
@@ -1688,4 +1702,25 @@ pub fn print_usage_pjc() {
     println!("    -s <file>       skip <file> in autorun");
     println!("  -d <file>.pj      enable debug");
     println!("  <file>.pj         interpret <file>.pj");
+}
+
+
+#[cfg(test)]
+mod dir_scope_tests {
+    use super::{Scope, Value};
+
+    #[test]
+    fn visible_names_include_parent_scope_and_are_sorted() {
+        let parent = Scope::new(None);
+        Scope::set_declare(&parent, "zebra", Value::Int(1), false);
+        Scope::set_declare(&parent, "shared", Value::Int(2), false);
+        let child = Scope::new(Some(parent));
+        Scope::set_declare(&child, "alpha", Value::Int(3), false);
+        Scope::set_declare(&child, "shared", Value::Int(4), false);
+
+        assert_eq!(
+            Scope::visible_names(&child),
+            vec!["alpha".to_string(), "shared".to_string(), "zebra".to_string()]
+        );
+    }
 }

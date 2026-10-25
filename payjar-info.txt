@@ -17,6 +17,7 @@ TYPE CONVERSION
   toInt         - Convert a value to an integer
   toFloat       - Convert a value to a float
   typeOf        - Return the type name of a value as a string
+  dir           - List visible names, or an object's fields and methods
 
 STRING OPERATIONS
   strLen        - Return the length of a string
