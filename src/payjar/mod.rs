@@ -474,6 +474,20 @@ impl Scope {
             }
         }
     }
+    /// Return all variable names visible from this scope, including parent scopes.
+    /// Names are deduplicated (child bindings shadow parent bindings) and sorted.
+    pub fn visible_names(scope: &Rc<RefCell<Scope>>) -> Vec<String> {
+        let mut names = std::collections::HashSet::new();
+        let mut cur = Some(Rc::clone(scope));
+        while let Some(current) = cur {
+            let s = current.borrow();
+            names.extend(s.vars.keys().cloned());
+            cur = s.parent.as_ref().map(Rc::clone);
+        }
+        let mut names: Vec<String> = names.into_iter().collect();
+        names.sort();
+        names
+    }
 }
 
 // ============================================================
