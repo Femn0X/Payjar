@@ -324,3 +324,29 @@ pub fn tokenize(src: &str) -> Vec<Token> {
     }
     tokens
 }
+
+#[cfg(test)]
+mod unicode_tests {
+    use super::*;
+
+    #[test]
+    fn quoted_strings_preserve_unicode() {
+        let tokens = tokenize("\"ca€è — 日本語 😀\"");
+        assert_eq!(tokens[0].typ, TokenType::StringLiteral);
+        assert_eq!(tokens[0].value, "ca€è — 日本語 😀");
+    }
+
+    #[test]
+    fn regex_strings_preserve_unicode() {
+        let tokens = tokenize("§\"ca€è — 日本語 😀\"");
+        assert_eq!(tokens[0].typ, TokenType::RegexString);
+        assert_eq!(tokens[0].value, "ca€è — 日本語 😀");
+    }
+
+    #[test]
+    fn template_strings_preserve_unicode_for_interpolation() {
+        let tokens = tokenize("`value: ${_name} — ca€è`");
+        assert_eq!(tokens[0].typ, TokenType::BacktickString);
+        assert_eq!(tokens[0].value, "value: ${_name} — ca€è");
+    }
+}
