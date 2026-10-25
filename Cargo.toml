@@ -18,6 +18,7 @@ tempfile   = "3"
 sha2       = "0.10"
 md-5       = "0.10"
 base64     = "0.22"
+getrandom  = "0.2"
 rustc-hash = "2"
 rustls = { version = "0.23", default-features = false, features = ["logging", "std", "tls12", "ring"] }
 url        = "2.5"

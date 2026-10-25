@@ -442,12 +442,11 @@ pub fn eval_regex_builtin(name: &str, args: Vec<Value>) -> Value {
 // RANDOM
 // ============================================================
 pub fn eval_random_builtin(name: &str, args: Vec<Value>) -> Value {
-    use std::time::{SystemTime, UNIX_EPOCH};
     fn rng() -> u64 {
-        let n = SystemTime::now().duration_since(UNIX_EPOCH)
-            .map(|d| d.subsec_nanos() as u64 ^ d.as_secs().wrapping_mul(2654435761))
-            .unwrap_or(99991);
-        n.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407)
+        // OS-provided CSPRNG (was: clock-seeded LCG, predictable)
+        let mut b = [0u8; 8];
+        getrandom::getrandom(&mut b).expect("OS RNG unavailable");
+        u64::from_le_bytes(b)
     }
     match name {
         "randint"   => { need!(args,2); let lo=args[0].as_int();let hi=args[1].as_int(); if lo>hi{eprintln!("random.randint: lo>hi");process::exit(1);} Value::Int(lo+(rng()%(hi-lo+1) as u64) as i64) }
@@ -835,19 +834,19 @@ fn post_req(url: &str, body: &str, content_type: &str) -> Result<String, String>
 
 /// Fallback helper to execute secure HTTPS requests via platform-native utilities (`curl` or `powershell`).
 fn https_fallback(url: &str, method: &str, body: Option<&str>, ct: Option<&str>) -> Result<(String, i64), String> {
+    validate_url(url)?;
     if cfg!(target_os = "windows") {
+        // Values are passed via environment variables, never interpolated
+        // into the script, so quotes in url/body cannot inject commands.
         let mut cmd = Command::new("powershell");
         cmd.arg("-NoProfile").arg("-Command");
+        cmd.env("PJ_URL", url)
+           .env("PJ_BODY", body.unwrap_or(""))
+           .env("PJ_CT", ct.unwrap_or("application/x-www-form-urlencoded"));
         let script = if method == "POST" {
-            format!(
-                "$r = Invoke-WebRequest -Uri '{}' -Method Post -Body '{}' -ContentType '{}' -UseBasicParsing; Write-Output \"$($r.StatusCode)`n$($r.Content)\"",
-                url, body.unwrap_or(""), ct.unwrap_or("application/x-www-form-urlencoded")
-            )
+            "$r = Invoke-WebRequest -Uri $env:PJ_URL -Method Post -Body $env:PJ_BODY -ContentType $env:PJ_CT -UseBasicParsing; Write-Output \"$($r.StatusCode)`n$($r.Content)\""
         } else {
-            format!(
-                "$r = Invoke-WebRequest -Uri '{}' -Method Get -UseBasicParsing; Write-Output \"$($r.StatusCode)`n$($r.Content)\"",
-                url
-            )
+            "$r = Invoke-WebRequest -Uri $env:PJ_URL -Method Get -UseBasicParsing; Write-Output \"$($r.StatusCode)`n$($r.Content)\""
         };
         let out = cmd.arg(script).output().map_err(|e| e.to_string())?;
         let resp = String::from_utf8_lossy(&out.stdout);
@@ -857,11 +856,14 @@ fn https_fallback(url: &str, method: &str, body: Option<&str>, ct: Option<&str>)
         Ok((body_out.join("\n"), code))
     } else {
         let mut cmd = Command::new("curl");
-        cmd.arg("-s").arg("-i").arg("-X").arg(method).arg(url);
+        // restrict protocols (no file://, ftp://, ...) and add a timeout
+        cmd.args(["-s", "-i", "--proto", "=http,https", "--max-time", "15", "-X", method]);
         if method == "POST" {
             if let Some(c) = ct { cmd.arg("-H").arg(format!("Content-Type: {}", c)); }
             if let Some(b) = body { cmd.arg("-d").arg(b); }
         }
+        // `--` ends option parsing so a URL can never be read as a flag
+        cmd.arg("--").arg(url);
         let out = cmd.output().map_err(|e| e.to_string())?;
         let resp = String::from_utf8_lossy(&out.stdout).to_string();
 
@@ -880,7 +882,21 @@ fn https_fallback(url: &str, method: &str, body: Option<&str>, ct: Option<&str>)
     }
 }
 
+/// Reject anything that is not a plain http(s) URL. Blocks other schemes,
+/// quote characters (shell/PowerShell injection) and control characters
+/// (CRLF header injection in the raw TCP path).
+fn validate_url(url: &str) -> Result<(), String> {
+    if !(url.starts_with("http://") || url.starts_with("https://")) {
+        return Err("only http:// and https:// URLs are allowed".into());
+    }
+    if url.chars().any(|c| c.is_control() || c == ' ' || c == '\'' || c == '"' || c == '`') {
+        return Err("invalid characters in URL".into());
+    }
+    Ok(())
+}
+
 fn raw_http(url: &str, method: &str, body: Option<&str>, ct: Option<&str>) -> Result<(String, i64), String> {
+    validate_url(url)?;
     let parts = parse_url_parts(url);
     let (scheme, host, port_str, path, query) = (&parts[0], &parts[1], &parts[2], &parts[3], &parts[4]);
 

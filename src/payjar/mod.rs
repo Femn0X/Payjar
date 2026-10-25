@@ -1541,6 +1541,10 @@ fn load_folder_package(env: &mut Env, pkg_name: &str, alias: Option<&str>, debug
         return;
     }
 
+    // Package names must be plain identifiers: no path traversal.
+    if pkg_name.is_empty() || !pkg_name.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-') {
+        eprintln!("Import Error: invalid package name '{}'", pkg_name); process::exit(1);
+    }
     let init_path = format!("{}/init.pj", pkg_name);
     let src = fs::read_to_string(&init_path).unwrap_or_else(|_| {
         eprintln!("Import Error: cannot open '{}' for package '{}'", init_path, pkg_name); process::exit(1);
