@@ -1,0 +1,5 @@
+{
+  "appId": "com.example.app",
+  "appName": "pro-ide-react-vite-tauri",
+  "webDir": "dist"
+}
