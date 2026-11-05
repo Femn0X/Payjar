@@ -20,11 +20,16 @@ jobs:
         with:
           node-version: 24
 
-      - name: Check project files
+      - name: Debug project structure
         run: |
-          ls -la
-          test -f package.json
-          test -f package-lock.json
+         echo "CURRENT DIRECTORY:"
+         pwd
+
+         echo "ROOT FILES:"
+         ls -la
+
+         echo "FIND PACKAGE FILES:"
+         find . -maxdepth 4 \( -name package.json -o -name package-lock.json \) -print
 
       - name: Setup Java
         uses: actions/setup-java@v4
