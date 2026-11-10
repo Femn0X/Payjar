@@ -96,12 +96,12 @@ impl Vm {
                         Instruction::Add => lhs.checked_add(rhs).ok_or(VmError::IntegerOverflow)?,
                         Instruction::Sub => lhs.checked_sub(rhs).ok_or(VmError::IntegerOverflow)?,
                         Instruction::Mul => lhs.checked_mul(rhs).ok_or(VmError::IntegerOverflow)?,
-                        Instruction::Eq => i64::from(lhs == rhs),
-                        Instruction::Ne => i64::from(lhs != rhs),
-                        Instruction::Lt => i64::from(lhs < rhs),
-                        Instruction::Le => i64::from(lhs <= rhs),
-                        Instruction::Gt => i64::from(lhs > rhs),
-                        Instruction::Ge => i64::from(lhs >= rhs),
+                        Instruction::Eq => if lhs == rhs { 1 } else { 0 },
+                        Instruction::Ne => if lhs != rhs { 1 } else { 0 },
+                        Instruction::Lt => if lhs < rhs { 1 } else { 0 },
+                        Instruction::Le => if lhs <= rhs { 1 } else { 0 },
+                        Instruction::Gt => if lhs > rhs { 1 } else { 0 },
+                        Instruction::Ge => if lhs >= rhs { 1 } else { 0 },
                         _ => unreachable!(),
                     };
                     stack.push(value);
