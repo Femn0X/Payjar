@@ -16,7 +16,8 @@ pub use lexer::tokenize;
 pub use parser::Parser;
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+// Faster non-cryptographic hashing for interpreter symbol tables.
+use rustc_hash::FxHashMap as HashMap;
 use std::fs;
 use std::io::{self, BufRead, Write};
 use std::process;
