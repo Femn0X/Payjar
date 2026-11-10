@@ -18,6 +18,38 @@ This is an assembly **source emitter**, not yet an executable JIT and not yet
 a replacement for the complete tree-walking interpreter. No generated code is
 executed by this module.
 
+## Shared VM v1
+
+The architecture-neutral bytecode layer is in `src/payjar/asm_vm.rs`.
+It currently compiles a constrained AST subset into a stack-based instruction
+stream and executes that stream in a portable VM:
+
+- integer constants and local variables;
+- integer `+`, `-`, `*` and comparisons;
+- `if` / `else`, `while`, and `return`;
+- checked arithmetic, explicit compile/runtime errors, and a configurable
+  instruction-step limit.
+
+The first VM version uses one flat local frame. Lexical shadowing, block-scope
+lifetimes, floats, strings, collections, function calls, exceptions, and
+built-ins are not yet supported. In particular, integer overflow returns a VM
+error rather than silently changing PayJar's integer value into a float. The
+caller must therefore fall back to the existing interpreter for unsupported
+programs or VM errors.
+
+Example:
+
+```rust
+use crate::payjar::asm_vm::{compile, Vm};
+
+let program = compile(&ast.body)?;
+let result = Vm::default().execute(&program)?;
+```
+
+This VM is a shared execution specification; it does not yet emit native
+instructions from bytecode. The x86-64 and AArch64 assembly emitters remain
+separate, earlier-stage source generators.
+
 ## Architecture
 
 Both targets share the PayJar AST and the same validation/lowering decisions.
@@ -32,13 +64,13 @@ and makes evaluation order explicit.
 
 ## Planned milestones
 
-1. **Assembly foundation** — shared target selection, safe expression subset,
-   and testable x86-64/AArch64 source emission. (In progress.)
-2. **Native interpreter core** — define a stable PayJar VM instruction set and
-   runtime calling convention; execute supported instructions through a small
-   native runtime while unsupported language features remain on the Rust path.
-3. **Full expression and statement lowering** — variables, comparisons,
-   branches, loops, calls, and returns.
+1. **Assembly foundation** — shared target selection and testable x86-64/AArch64
+   source emission for constant integer arithmetic. (Complete.)
+2. **Shared VM v1** — architecture-neutral bytecode, local slots, arithmetic,
+   comparisons, branches, loops, returns, and a portable reference executor.
+   (Implemented experimentally; native lowering and full scope semantics remain.)
+3. **Native x86-64/AArch64 lowering** — translate the shared VM instruction set
+   into target-specific machine code/source and validate both against the VM.
 4. **Runtime bridge** — PayJar values, strings, lists, objects, exceptions,
    built-ins, and module calls with interpreter-compatible semantics.
 5. **Native JIT** — assemble/encode generated instructions, allocate executable
