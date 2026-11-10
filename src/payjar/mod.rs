@@ -8,6 +8,7 @@ pub mod sqlite3;
 pub mod gui_channel;
 pub mod jit;
 pub mod asm;
+pub mod asm_vm;
 
 // Re-export everything callers need
 pub use ast::{AstNode, NodeType};
