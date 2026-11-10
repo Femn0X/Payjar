@@ -101,6 +101,20 @@ Build with `cargo build --release`. Cranelift may increase build time and binary
 
 ---
 
+## Native assembly backend (experimental)
+
+PayJar now has the first shared assembly-code-generation foundation in
+`src/payjar/asm.rs`. It can emit GNU assembler source for x86-64 and AArch64
+from pure integer-literal expressions using `+`, `-`, and `*`.
+
+The generated function returns an `i64` using the target ABI's return
+register (RAX on x86-64, X0 on AArch64). Unsupported AST nodes and integer
+overflow are rejected so the existing interpreter remains the fallback.
+
+This is currently an **assembly source emitter**, not yet a full assembly
+interpreter or executable native JIT. The broader implementation plan,
+architecture notes, and milestones are in [ASSEMBLY_BACKEND.md](ASSEMBLY_BACKEND.md).
+
 ## Building the Interpreter
 
 ### Rust
