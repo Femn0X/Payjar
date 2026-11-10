@@ -72,7 +72,6 @@ pub fn emit_integer_expression(
             out.push_str(".text\n.globl payjar_entry\n.type payjar_entry, %function\npayjar_entry:\n");
             out.push_str("    stp x29, x30, [sp, #-16]!\n    mov x29, sp\n");
             emit_aarch64(node, &mut out)?;
-            out.push_str("    ldr x0, [sp]\n    add sp, sp, #16\n");
             out.push_str("    ldp x29, x30, [sp], #16\n    ret\n.size payjar_entry, .-payjar_entry\n");
         }
     }
@@ -113,10 +112,11 @@ fn emit_aarch64(node: &AstNode, out: &mut String) -> Result<(), AssemblyError> {
                     out.push_str(&format!("    movk x0, #{}, lsl #{}\n", part, shift));
                 }
             }
-            out.push_str("    sub sp, sp, #16\n    str x0, [sp]\n");
+            
         }
         NodeType::BinaryOp => {
             emit_aarch64(node.left.as_deref().ok_or(AssemblyError::UnsupportedExpression)?, out)?;
+            out.push_str("    sub sp, sp, #16\n    str x0, [sp]\n");
             emit_aarch64(node.right.as_deref().ok_or(AssemblyError::UnsupportedExpression)?, out)?;
             out.push_str("    mov x9, x0\n    ldr x0, [sp]\n    add sp, sp, #16\n");
             match node.str_val.as_deref() {
@@ -125,8 +125,7 @@ fn emit_aarch64(node: &AstNode, out: &mut String) -> Result<(), AssemblyError> {
                 Some("*") => out.push_str("    mul x0, x0, x9\n"),
                 _ => return Err(AssemblyError::UnsupportedExpression),
             }
-            out.push_str("    sub sp, sp, #16\n    str x0, [sp]\n");
-        }
+            }
         _ => return Err(AssemblyError::UnsupportedExpression),
     }
     Ok(())
@@ -166,7 +165,7 @@ mod tests {
         let asm = emit_integer_expression(&expr, AssemblyTarget::Aarch64).unwrap();
         assert!(asm.contains("sub x0, x0, x9"));
         assert!(asm.contains("movz x0, #100"));
-        assert!(asm.contains("ldr x0, [sp]\n    add sp, sp, #16\n    ldp x29, x30"));
+        assert!(asm.contains("ldr x0, [sp]\n    add sp, sp, #16\n    sub x0, x0, x9"));
     }
 
     #[test]
