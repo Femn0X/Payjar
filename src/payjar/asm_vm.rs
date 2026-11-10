@@ -129,10 +129,10 @@ impl Vm {
 pub fn compile(nodes: &[AstNode]) -> Result<Program, CompileError> {
     let mut compiler = Compiler { code: Vec::new(), locals: HashMap::new() };
     compiler.statements(nodes)?;
-    if !matches!(compiler.code.last(), Some(Instruction::Return)) {
-        compiler.code.push(Instruction::Const(0));
-        compiler.code.push(Instruction::Return);
-    }
+    // Every control-flow path needs a valid fallthrough return, including
+    // the false edge of an if-without-else.
+    compiler.code.push(Instruction::Const(0));
+    compiler.code.push(Instruction::Return);
     Ok(Program { code: compiler.code, local_count: compiler.locals.len() })
 }
 
