@@ -1,3 +1,4 @@
 # PayJar runtime configuration
-# backend: "interpreter" (default, full compatibility), "jit" (JIT fast path + interpreter fallback), or "auto"
+# The interpreter always applies safe integer-constant folding.
+# Unsupported expressions continue through the normal interpreter.
 backend = "interpreter"

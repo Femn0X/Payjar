@@ -47,7 +47,7 @@ The language is intentionally small but expressive enough to build non‑trivial
 | `charAt` | Get character at index |
 | `strSlice` | Slice a string |
 | `strContains` | Check if string contains substring |
-| `strSplit` | Split string by delimiter |
+| `strSplit` | Split a string by delimiter |
 | `strTrim` | Trim whitespace |
 | `strStartsWith` | Check string prefix |
 | `strEndsWith` | Check string suffix |
@@ -56,14 +56,15 @@ The language is intentionally small but expressive enough to build non‑trivial
 | `appendFile` | Append to a file |
 | `exit` | Exit the program |
 | `range` | Generate a numeric range |
-| `typeOf` | Get the type of a value |\n| `dir` | List visible names or an object's fields and methods |
+| `typeOf` | Get the type of a value |
+| `dir` | List visible names or an object's fields and methods |
 | `indexOf` | Get index of element in list/string |
 | `len` | Get length of list or string |
 | `pow` | Raise a number to a power |
 
 ---
 
-## Built-in Modules
+## Built‑in Modules
 
 PayJar includes the following modules accessed via dot notation (e.g., `math.sin(x)`, `json.parse(str)`, etc.):
 
@@ -85,25 +86,19 @@ PayJar includes the following modules accessed via dot notation (e.g., `math.sin
 
 ---
 
-## Runtime backend (experimental JIT)
+## Runtime performance
 
-PayJar defaults to the existing interpreter, preserving current behavior. To opt into the experimental Cranelift fast path, set the root `config.toml` to:
+The interpreter always applies a small, semantics-preserving integer constant-folding fast path. Pure integer expressions using `+`, `-`, and `*` are evaluated directly without allocating intermediate runtime values. Expressions involving variables, calls, floats, unsupported operators, or integer overflow continue through the normal interpreter, preserving its existing behavior (including integer-to-float promotion on overflow).
 
-```toml
-backend = "jit"
-```
+This optimization is automatic; no configuration change or environment variable is required. The former per-expression Cranelift JIT setup was removed because compiling a fresh native function for each tiny expression cost more than simply evaluating the expression.
 
-Alternatively, set `PAYJAR_BACKEND=jit` in the environment. An absent config file or `backend = "interpreter"` keeps the default tree-walker. `auto` currently enables the same conservative fast path as `jit`.
-
-The initial JIT compiles only pure integer-literal arithmetic trees using `+`, `-`, and `*`. Expressions with variables, calls, floats, unsupported operators, overflow, or JIT compilation errors fall back to the existing interpreter. This is an incremental first stage, not a claim that whole programs are compiled to native code.
-
-Build with `cargo build --release`. Cranelift may increase build time and binary size.
+Build with `cargo build --release`.
 
 ---
 
 ## Native assembly backend (experimental)
 
-PayJar now has the first shared assembly-code-generation foundation in
+PayJar has a shared assembly-code-generation foundation in
 `src/payjar/asm.rs`. It can emit GNU assembler source for x86-64 and AArch64
 from pure integer-literal expressions using `+`, `-`, and `*`.
 
@@ -111,11 +106,11 @@ The generated function returns an `i64` using the target ABI's return
 register (RAX on x86-64, X0 on AArch64). Unsupported AST nodes and integer
 overflow are rejected so the existing interpreter remains the fallback.
 
-A shared experimental bytecode VM now also lives in `src/payjar/asm_vm.rs`.
-It supports integer locals, arithmetic/comparisons, `if`/`else`, `while`,
-and `return`, with a portable reference executor. Its local-frame and integer
-semantics are intentionally limited; unsupported programs must continue
-through the existing interpreter.
+A shared experimental bytecode VM lives in `src/payjar/asm_vm.rs`. It
+supports integer locals, arithmetic/comparisons, `if`/`else`, `while`,
+and `return`, with a portable reference executor. Its local-frame and
+integer semantics are intentionally limited; unsupported programs must
+continue through the existing interpreter.
 
 This is still **not** native execution of the bytecode and is not yet a
 replacement for the full interpreter or an executable native JIT. The broader
@@ -123,8 +118,6 @@ implementation plan, architecture notes, and milestones are in
 [ASSEMBLY_BACKEND.md](ASSEMBLY_BACKEND.md).
 
 ## Building the Interpreter
-
-### Rust
 
 Requires Rust toolchain (`rustup`/`cargo`):
 
@@ -152,7 +145,7 @@ The `examples/` directory contains sample programs:
 - `advanced.pj` – showcases classes, loops, I/O, and other language constructs.
 - `examples/pack/` – a package example.
 
-Feel free to modify or add your own `.pj` files and run them with `Payjar` .
+Feel free to modify or add your own `.pj` files and run them with `Payjar`.
 
 ---
 
@@ -174,7 +167,7 @@ See `react-ide/README.md` for more details.
 
 ## Changelog
 
-See [CHANGELOG.md](CHANGELOG.md) for version history.
+See `CHANGELOG.md` for version history.
 
 ---
 
