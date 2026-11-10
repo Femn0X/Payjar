@@ -1,4 +1,5 @@
 use super::{Token, TokenType};
+use std::borrow::Cow;
 use std::process;
 
 /// Remove `//` line comments and `/* */` block comments.
@@ -313,8 +314,17 @@ impl<'a> Lexer<'a> {
 }
 
 pub fn tokenize(src: &str) -> Vec<Token> {
-    let clean = remove_comments(src);
-    let mut lexer = Lexer::new(&clean);
+    // Most source files contain no comments. Borrow the original source in
+    // that common case instead of allocating and copying the entire file.
+    // The cheap substring checks may produce false positives inside strings,
+    // but that only takes the existing comment-removal path; it cannot change
+    // tokenization semantics.
+    let clean = if src.contains("//") || src.contains("/*") {
+        Cow::Owned(remove_comments(src))
+    } else {
+        Cow::Borrowed(src)
+    };
+    let mut lexer = Lexer::new(clean.as_ref());
     let mut tokens = Vec::with_capacity(clean.len() / 4 + 8);
     loop {
         let tok = lexer.next_token();
