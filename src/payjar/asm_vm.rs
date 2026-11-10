@@ -8,7 +8,7 @@
 use crate::payjar::ast::{AstNode, NodeType};
 use std::collections::HashMap;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Instruction {
     Const(i64),
     LoadLocal(usize),
@@ -175,7 +175,7 @@ impl Compiler {
 
     fn statements(&mut self, nodes: &[AstNode]) -> Result<(), CompileError> {
         for node in nodes {
-            match node.typ {
+            match &node.typ {
                 NodeType::VarDecl => {
                     let name = node.name.as_deref().unwrap_or_default().to_owned();
                     if self.locals.contains_key(&name) {
