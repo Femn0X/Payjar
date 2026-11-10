@@ -395,7 +395,7 @@ pub struct Scope {
 
 impl Scope {
     pub fn new(parent: Option<Rc<RefCell<Scope>>>) -> Rc<RefCell<Self>> {
-        Rc::new(RefCell::new(Scope { vars: HashMap::new(), parent }))
+        Rc::new(RefCell::new(Scope { vars: HashMap::default(), parent }))
     }
     pub fn set_declare(scope: &Rc<RefCell<Scope>>, name: &str, val: Value, is_const: bool) {
         let mut s = scope.borrow_mut();
@@ -489,9 +489,9 @@ impl Env {
     pub fn new() -> Self {
         install_quiet_panic_hook();
         let mut env = Env {
-            funcs: HashMap::new(),
-            classes: HashMap::new(),
-            enums: HashMap::new(),
+            funcs: HashMap::default(),
+            classes: HashMap::default(),
+            enums: HashMap::default(),
             scope: Scope::new(None),
         };
         register_builtin_modules(&mut env);
