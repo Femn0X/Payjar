@@ -8,7 +8,7 @@ on:
     tags: ["v*"]
   pull_request:
     branches: [main]
-  workflow_dispatch: {}   # lets you click "Run workflow" manually in the Actions tab
+  workflow_dispatch: {}
 
 env:
   CARGO_TERM_COLOR: always
@@ -31,8 +31,9 @@ jobs:
         run: cargo test --no-run
       - name: Run tests
         run: cargo test
+
   # ---------------------------------------------------------------------
-  # Windows: build and package the x86_64 executable.
+  # Windows x86_64: build and package the standard 64-bit executable.
   # ---------------------------------------------------------------------
   windows:
     name: Windows x86_64
@@ -64,9 +65,43 @@ jobs:
           path: dist/Payjar-windows-x86_64.zip
 
   # ---------------------------------------------------------------------
-  # macOS: builds both Apple Silicon (aarch64) and Intel (x86_64) on the
-  # same macos-latest runner (it ships both SDKs), then glues them into
-  # one universal binary with `lipo` so it runs natively on either Mac.
+  # Windows ARM64: cross-compile for aarch64 Windows using the MSVC ARM64
+  # target and the ARM64 libraries available on the hosted Windows image.
+  # ---------------------------------------------------------------------
+  windows-arm64:
+    name: Windows aarch64 (ARM64)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable with Windows ARM64 target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-pc-windows-msvc
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build release executable
+        run: cargo build --release --target aarch64-pc-windows-msvc
+
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist/Payjar-windows-aarch64 | Out-Null
+          Copy-Item target/aarch64-pc-windows-msvc/release/Payjar.exe dist/Payjar-windows-aarch64/
+          Copy-Item README.md dist/Payjar-windows-aarch64/
+          Copy-Item examples dist/Payjar-windows-aarch64/ -Recurse
+          Compress-Archive -Path dist/Payjar-windows-aarch64 -DestinationPath dist/Payjar-windows-aarch64.zip -Force
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Payjar-windows-aarch64
+          path: dist/Payjar-windows-aarch64.zip
+
+  # ---------------------------------------------------------------------
+  # macOS: build Apple Silicon and Intel binaries, then combine them into
+  # one universal executable.
   # ---------------------------------------------------------------------
   macos:
     name: macOS (universal)
@@ -101,12 +136,6 @@ jobs:
           lipo -info dist/Payjar-macos-universal/Payjar
 
       - name: Ad-hoc codesign
-        # Without this, Gatekeeper on newer macOS refuses to run an
-        # unsigned binary downloaded from the internet at all. Ad-hoc
-        # signing (no Apple Developer account needed) satisfies the
-        # local "is this binary tampered with" check; users will still
-        # see one "unidentified developer" prompt the first time unless
-        # you later add a real Developer ID + notarization.
         run: codesign --force --deep --sign - dist/Payjar-macos-universal/Payjar
 
       - name: Zip
@@ -120,16 +149,16 @@ jobs:
           path: dist/Payjar-macos-universal.zip
 
   # ---------------------------------------------------------------------
-  # On a tag push (e.g. `git tag v1.4.0 && git push origin v1.4.0`),
-  # collect both zip files and attach them to a GitHub Release.
+  # On a v* tag, collect all three platform archives and attach them to
+  # a GitHub Release.
   # ---------------------------------------------------------------------
   release:
     name: Publish GitHub Release
-    needs: [windows, macos]
+    needs: [windows, windows-arm64, macos]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
-      contents: write   # required to create a GitHub Release + upload assets
+      contents: write
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -140,5 +169,6 @@ jobs:
         with:
           files: |
             artifacts/Payjar-windows-x86_64/Payjar-windows-x86_64.zip
+            artifacts/Payjar-windows-aarch64/Payjar-windows-aarch64.zip
             artifacts/Payjar-macos-universal/Payjar-macos-universal.zip
           generate_release_notes: true
