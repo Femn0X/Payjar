@@ -1,4 +1,5 @@
 use super::{Token, TokenType};
+use std::borrow::Cow;
 use std::process;
 
 /// Remove `//` line comments and `/* */` block comments.
@@ -313,8 +314,17 @@ impl<'a> Lexer<'a> {
 }
 
 pub fn tokenize(src: &str) -> Vec<Token> {
-    let clean = remove_comments(src);
-    let mut lexer = Lexer::new(&clean);
+    // Most source files contain no comments. Borrow the original source in
+    // that common case instead of allocating and copying the entire file.
+    // The cheap substring checks may produce false positives inside strings,
+    // but that only takes the existing comment-removal path; it cannot change
+    // tokenization semantics.
+    let clean = if src.contains("//") || src.contains("/*") {
+        Cow::Owned(remove_comments(src))
+    } else {
+        Cow::Borrowed(src)
+    };
+    let mut lexer = Lexer::new(clean.as_ref());
     let mut tokens = Vec::with_capacity(clean.len() / 4 + 8);
     loop {
         let tok = lexer.next_token();
@@ -348,5 +358,24 @@ mod unicode_tests {
         let tokens = tokenize("`value: ${_name} — ca€è`");
         assert_eq!(tokens[0].typ, TokenType::BacktickString);
         assert_eq!(tokens[0].value, "value: ${_name} — ca€è");
+    }
+
+    #[test]
+    fn tokenizes_source_without_comments() {
+        let tokens = tokenize("let answer = 40 + 2;");
+        assert_eq!(tokens.iter().map(|t| t.typ.clone()).collect::<Vec<_>>(), vec![
+            TokenType::Let, TokenType::Identifier, TokenType::Equal,
+            TokenType::Number, TokenType::Plus, TokenType::Number,
+            TokenType::Semicolon, TokenType::Eof,
+        ]);
+    }
+
+    #[test]
+    fn preserves_comment_markers_inside_strings() {
+        let tokens = tokenize("let url = \"https://example.com/a/*b*/\"; // trailing comment");
+        assert_eq!(tokens[3].typ, TokenType::StringLiteral);
+        assert_eq!(tokens[3].value, "https://example.com/a/*b*/");
+        assert_eq!(tokens[4].typ, TokenType::Semicolon);
+        assert_eq!(tokens[5].typ, TokenType::Eof);
     }
 }
