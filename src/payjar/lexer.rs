@@ -359,4 +359,23 @@ mod unicode_tests {
         assert_eq!(tokens[0].typ, TokenType::BacktickString);
         assert_eq!(tokens[0].value, "value: ${_name} — ca€è");
     }
+
+    #[test]
+    fn tokenizes_source_without_comments() {
+        let tokens = tokenize("let answer = 40 + 2;");
+        assert_eq!(tokens.iter().map(|t| t.typ.clone()).collect::<Vec<_>>(), vec![
+            TokenType::Let, TokenType::Identifier, TokenType::Equal,
+            TokenType::Number, TokenType::Plus, TokenType::Number,
+            TokenType::Semicolon, TokenType::Eof,
+        ]);
+    }
+
+    #[test]
+    fn preserves_comment_markers_inside_strings() {
+        let tokens = tokenize("let url = \"https://example.com/a/*b*/\"; // trailing comment");
+        assert_eq!(tokens[3].typ, TokenType::StringLiteral);
+        assert_eq!(tokens[3].value, "https://example.com/a/*b*/");
+        assert_eq!(tokens[4].typ, TokenType::Semicolon);
+        assert_eq!(tokens[5].typ, TokenType::Eof);
+    }
 }
