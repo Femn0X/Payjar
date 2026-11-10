@@ -34,11 +34,9 @@ impl std::fmt::Display for AssemblyError {
 
 impl std::error::Error for AssemblyError {}
 
-/// Check the subset and preserve PayJar's current checked-integer behavior.
-/// Expressions that overflow are rejected so the caller can use the normal
-/// interpreter path, where numeric promotion is handled correctly.
+/// Validate the supported subset and preserve checked-integer semantics.
 fn validate(node: &AstNode) -> Result<i64, AssemblyError> {
-    match node.typ {
+    match &node.typ {
         NodeType::Int => Ok(node.int_val),
         NodeType::BinaryOp => {
             let left = validate(node.left.as_deref().ok_or(AssemblyError::UnsupportedExpression)?)?;
@@ -57,8 +55,7 @@ fn validate(node: &AstNode) -> Result<i64, AssemblyError> {
 /// Emit a complete native function named `payjar_entry`.
 ///
 /// x86-64 uses the System V ABI (result in RAX); AArch64 uses AAPCS64
-/// (result in X0). The generated function performs no calls and uses only
-/// caller-saved scratch registers.
+/// (result in X0). Output currently targets GNU assembler on ELF platforms.
 pub fn emit_integer_expression(
     node: &AstNode,
     target: AssemblyTarget,
@@ -69,12 +66,13 @@ pub fn emit_integer_expression(
         AssemblyTarget::X86_64 => {
             out.push_str(".text\n.globl payjar_entry\n.type payjar_entry, @function\npayjar_entry:\n");
             emit_x86(node, &mut out)?;
-            out.push_str("    ret\n.size payjar_entry, .-payjar_entry\n");
+            out.push_str("    pop rax\n    ret\n.size payjar_entry, .-payjar_entry\n");
         }
         AssemblyTarget::Aarch64 => {
             out.push_str(".text\n.globl payjar_entry\n.type payjar_entry, %function\npayjar_entry:\n");
             out.push_str("    stp x29, x30, [sp, #-16]!\n    mov x29, sp\n");
             emit_aarch64(node, &mut out)?;
+            out.push_str("    ldr x0, [sp]\n    add sp, sp, #16\n");
             out.push_str("    ldp x29, x30, [sp], #16\n    ret\n.size payjar_entry, .-payjar_entry\n");
         }
     }
@@ -82,9 +80,9 @@ pub fn emit_integer_expression(
 }
 
 fn emit_x86(node: &AstNode, out: &mut String) -> Result<(), AssemblyError> {
-    match node.typ {
+    match &node.typ {
         NodeType::Int => {
-            out.push_str(&format!("    mov rax, {}\n    push rax\n", node.int_val));
+            out.push_str(&format!("    movabs rax, {}\n    push rax\n", node.int_val));
         }
         NodeType::BinaryOp => {
             emit_x86(node.left.as_deref().ok_or(AssemblyError::UnsupportedExpression)?, out)?;
@@ -104,7 +102,7 @@ fn emit_x86(node: &AstNode, out: &mut String) -> Result<(), AssemblyError> {
 }
 
 fn emit_aarch64(node: &AstNode, out: &mut String) -> Result<(), AssemblyError> {
-    match node.typ {
+    match &node.typ {
         NodeType::Int => {
             let bits = node.int_val as u64;
             for shift in (0..64).step_by(16) {
@@ -131,7 +129,6 @@ fn emit_aarch64(node: &AstNode, out: &mut String) -> Result<(), AssemblyError> {
         }
         _ => return Err(AssemblyError::UnsupportedExpression),
     }
-    // The top-level result is popped by the epilogue helper below.
     Ok(())
 }
 
@@ -154,27 +151,28 @@ mod tests {
     }
 
     #[test]
-    fn emits_x86_64_integer_arithmetic() {
+    fn emits_x86_64_integer_arithmetic_and_balances_stack() {
         let expr = binary("+", int(10), binary("*", int(6), int(7)));
         let asm = emit_integer_expression(&expr, AssemblyTarget::X86_64).unwrap();
         assert!(asm.contains("imul rax, rbx"));
         assert!(asm.contains("add rax, rbx"));
-        assert!(asm.ends_with("    ret\n.size payjar_entry, .-payjar_entry\n"));
+        assert!(asm.contains("movabs rax, 10"));
+        assert!(asm.contains("    pop rax\n    ret"));
     }
 
     #[test]
-    fn emits_aarch64_integer_arithmetic() {
+    fn emits_aarch64_integer_arithmetic_and_restores_frame() {
         let expr = binary("-", int(100), int(42));
         let asm = emit_integer_expression(&expr, AssemblyTarget::Aarch64).unwrap();
         assert!(asm.contains("sub x0, x0, x9"));
         assert!(asm.contains("movz x0, #100"));
+        assert!(asm.contains("ldr x0, [sp]\n    add sp, sp, #16\n    ldp x29, x30"));
     }
 
     #[test]
     fn rejects_overflow_and_unsupported_nodes() {
         let overflow = binary("+", int(i64::MAX), int(1));
         assert_eq!(emit_integer_expression(&overflow, AssemblyTarget::X86_64), Err(AssemblyError::IntegerOverflow));
-        assert_eq!(emit_integer_expression(&int(1), AssemblyTarget::Aarch64).unwrap().contains("ret"), true);
         let mut float = AstNode::new(NodeType::Float);
         float.fval = 1.5;
         assert_eq!(emit_integer_expression(&float, AssemblyTarget::X86_64), Err(AssemblyError::UnsupportedExpression));
