@@ -111,9 +111,16 @@ The generated function returns an `i64` using the target ABI's return
 register (RAX on x86-64, X0 on AArch64). Unsupported AST nodes and integer
 overflow are rejected so the existing interpreter remains the fallback.
 
-This is currently an **assembly source emitter**, not yet a full assembly
-interpreter or executable native JIT. The broader implementation plan,
-architecture notes, and milestones are in [ASSEMBLY_BACKEND.md](ASSEMBLY_BACKEND.md).
+A shared experimental bytecode VM now also lives in `src/payjar/asm_vm.rs`.
+It supports integer locals, arithmetic/comparisons, `if`/`else`, `while`,
+and `return`, with a portable reference executor. Its local-frame and integer
+semantics are intentionally limited; unsupported programs must continue
+through the existing interpreter.
+
+This is still **not** native execution of the bytecode and is not yet a
+replacement for the full interpreter or an executable native JIT. The broader
+implementation plan, architecture notes, and milestones are in
+[ASSEMBLY_BACKEND.md](ASSEMBLY_BACKEND.md).
 
 ## Building the Interpreter
 
