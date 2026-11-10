@@ -7,10 +7,6 @@ name = "Payjar"
 version = "1.5.0"
 dependencies = [
  "base64",
- "cranelift-codegen",
- "cranelift-frontend",
- "cranelift-jit",
- "cranelift-module",
  "eframe",
  "egui",
  "getrandom 0.2.17",

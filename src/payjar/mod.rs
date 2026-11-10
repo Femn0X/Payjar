@@ -16,31 +16,12 @@ pub use lexer::tokenize;
 pub use parser::Parser;
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+// Faster non-cryptographic hashing for interpreter symbol tables.
+use rustc_hash::FxHashMap as HashMap;
 use std::fs;
 use std::io::{self, BufRead, Write};
 use std::process;
 use std::rc::Rc;
-use std::sync::OnceLock;
-
-fn jit_backend_enabled() -> bool {
-    static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED.get_or_init(|| {
-        if let Ok(value) = std::env::var("PAYJAR_BACKEND") {
-            return value.eq_ignore_ascii_case("jit") || value.eq_ignore_ascii_case("auto");
-        }
-        fs::read_to_string("config.toml").ok().and_then(|s| {
-            s.lines().find_map(|line| {
-                let (key, value) = line.split_once('=')?;
-                if key.trim() == "backend" {
-                    Some(value.trim().trim_matches('"').to_ascii_lowercase())
-                } else {
-                    None
-                }
-            })
-        }).map(|v| v == "jit" || v == "auto").unwrap_or(false)
-    })
-}
 // ============================================================
 // TOKEN TYPES  (used by lexer, parser, and interpreter)
 // ============================================================
@@ -414,7 +395,7 @@ pub struct Scope {
 
 impl Scope {
     pub fn new(parent: Option<Rc<RefCell<Scope>>>) -> Rc<RefCell<Self>> {
-        Rc::new(RefCell::new(Scope { vars: HashMap::new(), parent }))
+        Rc::new(RefCell::new(Scope { vars: HashMap::default(), parent }))
     }
     pub fn set_declare(scope: &Rc<RefCell<Scope>>, name: &str, val: Value, is_const: bool) {
         let mut s = scope.borrow_mut();
@@ -508,9 +489,9 @@ impl Env {
     pub fn new() -> Self {
         install_quiet_panic_hook();
         let mut env = Env {
-            funcs: HashMap::new(),
-            classes: HashMap::new(),
-            enums: HashMap::new(),
+            funcs: HashMap::default(),
+            classes: HashMap::default(),
+            enums: HashMap::default(),
             scope: Scope::new(None),
         };
         register_builtin_modules(&mut env);
@@ -1057,11 +1038,11 @@ pub fn eval(env: &mut Env, node: &AstNode, self_obj: Option<Rc<RefCell<PJObject>
         }
 
         NodeType::BinaryOp => {
-            // Conservative native fast path; unsupported trees retain interpreter semantics.
-            if jit_backend_enabled() {
-                if let Some(value) = jit::try_eval_integer_constant(node) {
-                    return Value::Int(value);
-                }
+            // Fast path for pure integer constants. It avoids constructing
+            // intermediate Values; unsupported or overflowing expressions
+            // retain the interpreter's normal semantics.
+            if let Some(value) = jit::try_eval_integer_constant(node) {
+                return Value::Int(value);
             }
             let lv = eval(env, node.left.as_ref().unwrap(), self_obj.clone());
             let rv = eval(env, node.right.as_ref().unwrap(), self_obj);
