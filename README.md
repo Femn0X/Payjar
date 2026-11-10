@@ -88,7 +88,7 @@ PayJar includes the following modules accessed via dot notation (e.g., `math.sin
 
 ## Runtime performance
 
-The interpreter always applies a small, semantics-preserving integer constant-folding fast path. Pure integer expressions using `+`, `-`, and `*` are evaluated directly without allocating intermediate runtime values. Expressions involving variables, calls, floats, unsupported operators, or integer overflow continue through the normal interpreter, preserving its existing behavior (including integer-to-float promotion on overflow).
+The interpreter uses faster hash maps for its variable/function symbol tables and always applies a small, semantics-preserving integer constant-folding fast path. Pure integer expressions using `+`, `-`, and `*` are evaluated directly without allocating intermediate runtime values. Expressions involving variables, calls, floats, unsupported operators, or integer overflow continue through the normal interpreter, preserving its existing behavior (including integer-to-float promotion on overflow).
 
 This optimization is automatic; no configuration change or environment variable is required. The former per-expression Cranelift JIT setup was removed because compiling a fresh native function for each tiny expression cost more than simply evaluating the expression.
 
