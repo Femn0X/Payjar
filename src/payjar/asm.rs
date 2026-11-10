@@ -64,7 +64,7 @@ pub fn emit_integer_expression(
     let mut out = String::new();
     match target {
         AssemblyTarget::X86_64 => {
-            out.push_str(".text\n.globl payjar_entry\n.type payjar_entry, @function\npayjar_entry:\n");
+            out.push_str(".text\n.intel_syntax noprefix\n.globl payjar_entry\n.type payjar_entry, @function\npayjar_entry:\n");
             emit_x86(node, &mut out)?;
             out.push_str("    pop rax\n    ret\n.size payjar_entry, .-payjar_entry\n");
         }
@@ -86,11 +86,11 @@ fn emit_x86(node: &AstNode, out: &mut String) -> Result<(), AssemblyError> {
         NodeType::BinaryOp => {
             emit_x86(node.left.as_deref().ok_or(AssemblyError::UnsupportedExpression)?, out)?;
             emit_x86(node.right.as_deref().ok_or(AssemblyError::UnsupportedExpression)?, out)?;
-            out.push_str("    pop rbx\n    pop rax\n");
+            out.push_str("    pop r10\n    pop rax\n");
             match node.str_val.as_deref() {
-                Some("+") => out.push_str("    add rax, rbx\n"),
-                Some("-") => out.push_str("    sub rax, rbx\n"),
-                Some("*") => out.push_str("    imul rax, rbx\n"),
+                Some("+") => out.push_str("    add rax, r10\n"),
+                Some("-") => out.push_str("    sub rax, r10\n"),
+                Some("*") => out.push_str("    imul rax, r10\n"),
                 _ => return Err(AssemblyError::UnsupportedExpression),
             }
             out.push_str("    push rax\n");
@@ -153,8 +153,8 @@ mod tests {
     fn emits_x86_64_integer_arithmetic_and_balances_stack() {
         let expr = binary("+", int(10), binary("*", int(6), int(7)));
         let asm = emit_integer_expression(&expr, AssemblyTarget::X86_64).unwrap();
-        assert!(asm.contains("imul rax, rbx"));
-        assert!(asm.contains("add rax, rbx"));
+        assert!(asm.contains("imul rax, r10"));
+        assert!(asm.contains("add rax, r10"));
         assert!(asm.contains("movabs rax, 10"));
         assert!(asm.contains("    pop rax\n    ret"));
     }
