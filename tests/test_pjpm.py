@@ -161,5 +161,29 @@ class ManifestTests(unittest.TestCase):
                 os.chdir(old_cwd)
 
 
+    def test_cached_release_replaced_if_archive_changes(self):
+        source = release("alpha", "1.0.0", commit="a" * 40)
+        def archive_with(text):
+            stream = io.BytesIO()
+            with zipfile.ZipFile(stream, "w") as archive:
+                archive.writestr("registry-snapshot/alpha/main.py", text)
+            return stream.getvalue()
+        first = archive_with("first")
+        second = archive_with("second")
+        with tempfile.TemporaryDirectory() as temp:
+            cwd = os.getcwd()
+            try:
+                os.chdir(temp)
+                with patch.object(pjpm, "http", return_value=first):
+                    pjpm.install_package(source)
+                with patch.object(pjpm, "http", return_value=second):
+                    result = pjpm.install_package(source)
+                self.assertEqual(Path(".pjpm/packages/alpha/1.0.0/main.py").read_text(), "second")
+                marker = json.loads(Path(".pjpm/packages/alpha/1.0.0/.pjpm-source.json").read_text())
+                self.assertEqual(marker["sha256"], result["sha256"])
+            finally:
+                os.chdir(cwd)
+
+
 if __name__ == "__main__":
     unittest.main()
