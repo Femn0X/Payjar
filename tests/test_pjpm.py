@@ -102,12 +102,17 @@ class ManifestTests(unittest.TestCase):
             finally:
                 os.chdir(old_dir)
 
+    def write_config(self, version='"1.0"'):
+        Path("config.toml").write_text(chr(10).join([
+            "[dependencies]", "Geometry = " + version, ""
+        ]))
+
     def test_config_only_dependencies(self):
         with tempfile.TemporaryDirectory() as directory:
             cwd = os.getcwd()
             try:
                 os.chdir(directory)
-                Path("config.toml").write_text('[dependencies]\\nGeometry = "1.0"\\n'.replace('\\\\n', '\\n'))
+                self.write_config()
                 self.assertEqual(pjpm.project_dependencies(), {"Geometry": "1.0"})
             finally:
                 os.chdir(cwd)
@@ -117,7 +122,7 @@ class ManifestTests(unittest.TestCase):
             cwd = os.getcwd()
             try:
                 os.chdir(directory)
-                Path("config.toml").write_text("[dependencies]\\nGeometry = 1.0\\n".replace('\\\\n', '\\n'))
+                self.write_config("1.0")
                 with self.assertRaisesRegex(pjpm.PjpmError, "constraint string"):
                     pjpm.project_dependencies()
             finally:
@@ -128,7 +133,7 @@ class ManifestTests(unittest.TestCase):
             cwd = os.getcwd()
             try:
                 os.chdir(directory)
-                Path("config.toml").write_text("[dependencies]\\nGeometry = \\"1.0\\"\\n".replace('\\\\n', '\\n'))
+                self.write_config()
                 Path("Geometry").mkdir()
                 Path("Geometry/init.pj").write_text("package Geometry;")
                 with patch.object(pjpm, "resolve_graph") as resolve:
@@ -143,17 +148,19 @@ class ManifestTests(unittest.TestCase):
             cwd = os.getcwd()
             try:
                 os.chdir(directory)
-                Path("config.toml").write_text("[dependencies]\\nGeometry = \\"1.0\\"\\n".replace('\\\\n', '\\n'))
+                self.write_config()
                 meta = release("Geometry", "1.0", commit="a" * 40)
                 record = {"name": "Geometry", "version": "1.0", "registry": pjpm.REGISTRY,
                           "commit": "a" * 40, "path": "Geometry", "sha256": "e" * 64}
+
                 def fake_install(_meta, expected_sha256=None):
                     root = Path(".pjpm/packages/Geometry/1.0")
                     root.mkdir(parents=True, exist_ok=True)
                     (root / "init.pj").write_text("package Geometry;")
                     (root / ".pjpm-source.json").write_text(json.dumps(record))
                     return record
-                with patch.object(pjpm, "resolve_graph", return_value=[meta]) as resolve, \\
+
+                with patch.object(pjpm, "resolve_graph", return_value=[meta]) as resolve, \
                      patch.object(pjpm, "install_package", side_effect=fake_install) as install:
                     pjpm.cmd_sync(argparse.Namespace())
                     pjpm.cmd_sync(argparse.Namespace())
