@@ -450,6 +450,12 @@ def resolve_graph(root_dependencies, locked=None):
 
 def cmd_add(args):
     name, constraint = parse_spec(args.package)
+    if not any(Path(filename).exists() for filename in (MANIFEST, LEGACY, "init.pj")):
+        raise PjpmError(
+            "pjpm add needs a project manifest in the current directory. "
+            "Create a separate project directory, run 'pjpm init' there, "
+            f"then run 'pjpm add {args.package}'."
+        )
     manifest = load_manifest()
     if manifest["format"] != "v2":
         raise PjpmError("pjpm add requires a v2 pjpackage.toml; run pjpm init first")
@@ -530,18 +536,33 @@ def cmd_list(args):
         if p.is_dir(): print(f"{p.parent.name} {p.name}")
 
 def cmd_search(args):
-    q=args.query.lower()
-    matches=[n for n in registry_dirs() if q in n.lower()]
-    for n in matches:
+    """Search package names, optionally filtering by a version constraint."""
+    query, constraint = args.query.rsplit("@", 1) if "@" in args.query else (args.query, "*")
+    if not query.strip() or not constraint.strip():
+        raise PjpmError("search expects a package keyword or name@version (for example Geometry@1.0)")
+    found = False
+    for name in registry_dirs():
+        if query.lower() not in name.lower():
+            continue
         try:
-            m=registry_manifest(n); print(f'{m["name"]} {m["version"]} [{m["language"]}]')
-        except PjpmError: print(n)
-    if not matches: print("No packages found.")
+            for meta in registry_candidates(name):
+                if version_ok(meta["version"], constraint):
+                    print(f'{meta["name"]} {meta["version"]} [{meta["language"]}]')
+                    found = True
+        except PjpmError as exc:
+            print(f"pjpm: warning: cannot inspect {name}: {exc}", file=sys.stderr)
+    if not found:
+        print("No matching package versions found.")
+
 
 def cmd_info(args):
-    name = safe_name(args.package)
+    name, constraint = parse_spec(args.package)
     choices = registry_candidates(name)
-    print(json.dumps({**choices[0], "available_versions": [x["version"] for x in choices]}, indent=2))
+    selected = next((meta for meta in choices if version_ok(meta["version"], constraint)), None)
+    if selected is None:
+        raise PjpmError(f"{name}: no version satisfies {constraint!r}; available: {', '.join(x['version'] for x in choices)}")
+    print(json.dumps({**selected, "available_versions": [x["version"] for x in choices]}, indent=2))
+
 
 def cmd_build(args):
     m=load_manifest(); b=m["build"]; adapter=b.get("adapter",m["language"])

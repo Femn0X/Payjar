@@ -20,11 +20,27 @@ Or run directly with `python3 pjpm.py`. To make it available globally, copy `pjp
 - `pjpm add <name>[@constraint]` — add and install a registry dependency.
 - `pjpm install` — install manifest dependencies and update `pjpm.lock`.
 - `pjpm remove <name>` / `uninstall <name>` — remove a dependency.
-- `pjpm search <query>`, `info <name>`, `list` — discover and inspect packages.
+- `pjpm search <query>` or `search <name>@<constraint>` — discover packages and versions (for example `Geometry@1.0`).
+- `pjpm info <name>[@constraint]`, `list` — inspect a specific release or list installed packages.
 - `pjpm build [--approve-build]` — run the declared build adapter after confirmation.
 - `pjpm run [args...]` — run the declared runtime entry point.
 - `pjpm doctor` — show available language toolchains.
 - `pjpm pack` — create a source archive and print its SHA-256 digest.
+
+## Adding dependencies to a project
+
+`pjpm add` records a dependency in the **current project's** `pjpackage.toml`. Running it from the Payjar compiler repository without a package manifest is not supported. Create or open a separate project first:
+
+```sh
+mkdir -p ~/payjar-demo
+cd ~/payjar-demo
+python3 ~/Payjar/pjpm.py init payjar-demo
+python3 ~/Payjar/pjpm.py search Geometry@1.0
+python3 ~/Payjar/pjpm.py add Geometry@1.0
+python3 ~/Payjar/pjpm.py list
+```
+
+`search` can filter available versions by SemVer constraint; `info Geometry@1.0` displays that particular release. Legacy two-component versions like `1.0` remain supported as exact version strings.
 
 ## Universal manifest
 
