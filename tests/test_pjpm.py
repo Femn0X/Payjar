@@ -1,5 +1,6 @@
 import tempfile, unittest
 from pathlib import Path
+from unittest.mock import patch
 import pjpm
 
 class ManifestTests(unittest.TestCase):
@@ -22,5 +23,22 @@ class ManifestTests(unittest.TestCase):
         self.assertTrue(pjpm.version_ok("1.4.0","^1.2.0"))
         self.assertFalse(pjpm.version_ok("2.0.0","^1.2.0"))
         self.assertTrue(pjpm.version_ok("1.4.2","~1.4.0"))
+        self.assertTrue(pjpm.version_ok("1.4.2",">=1.2.0,<2.0.0"))
+        self.assertFalse(pjpm.version_ok("2.0.0",">=1.2.0,<2.0.0"))
+    def test_transitive_resolution_order(self):
+        catalog={
+            "alpha":{"version":"1.0.0","dependencies":{"beta":"^1.0.0"}},
+            "beta":{"version":"1.2.0","dependencies":{}},
+        }
+        with patch.object(pjpm,"registry_manifest",side_effect=lambda n:catalog[n]):
+            self.assertEqual(pjpm.resolve_graph({"alpha":"*"}),[("beta","^1.0.0"),("alpha","*")])
+    def test_dependency_cycle(self):
+        catalog={
+            "alpha":{"version":"1.0.0","dependencies":{"beta":"*"}},
+            "beta":{"version":"1.0.0","dependencies":{"alpha":"*"}},
+        }
+        with patch.object(pjpm,"registry_manifest",side_effect=lambda n:catalog[n]):
+            with self.assertRaisesRegex(pjpm.PjpmError,"cycle"):
+                pjpm.resolve_graph({"alpha":"*"})
 
 if __name__=="__main__": unittest.main()
