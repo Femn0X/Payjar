@@ -36,13 +36,15 @@ Payjar now supports automatic installation of declared registry dependencies **b
 backend = "interpreter"
 
 [dependencies]
-Geometry = "1.0"
+Geometry = "1.0.1"
 # Future v2 packages may use constraints such as ^1.2.0
 ```
 
-Run `Payjar main.pj` as usual. The interpreter runs `pjpm sync` in the project directory when the config contains a `[dependencies]` table. It prefers a local `./Geometry/init.pj` if present, otherwise installs the requested version under `.pjpm/packages/Geometry/1.0/`. When the lockfile and installed files match the declarations, `pjpm sync` skips network access. The package's exact version/source commit is recorded in `pjpm.lock`; commit the lockfile for reproducible projects, but not the downloaded `.pjpm/` directory.
+Run `Payjar main.pj` as usual. The interpreter runs `pjpm sync` in the project directory when the config contains a `[dependencies]` table. It prefers a local `./Geometry/init.pj` if present, otherwise installs the requested version under `.pjpm/packages/Geometry/1.0.1/`. When the lockfile and installed files match the declarations, `pjpm sync` skips network access. The package's exact version/source commit is recorded in `pjpm.lock`; commit the lockfile for reproducible projects, but not the downloaded `.pjpm/` directory.
 
 The project directory is normally the current working directory. When running a script from another directory, Payjar also recognizes a `config.toml` alongside the script. You can install without running code via `python3 /path/to/pjpm.py install` or `python3 /path/to/pjpm.py sync` from the project directory. For standalone binaries, place `pjpm` on PATH or set `PAYJAR_PJPM=/absolute/path/to/pjpm.py`. Python 3.11+ is required.
+
+**Geometry note:** The original immutable `Geometry@1.0` package has malformed Payjar source. The companion [Geometry 1.0.1 registry PR](https://github.com/Femn0X/Payjar-Packages/pull/3) supplies an importable release without changing 1.0. Merge that registry PR before trying the example above.
 
 **Import behavior:** Only Payjar packages containing a valid `init.pj` can be imported directly. A Python, Rust, JavaScript, or other-language package can be downloaded and managed, but must expose a separately supported runtime bridge to be callable from Payjar; installing a package does **not** automatically transpile it.
 
