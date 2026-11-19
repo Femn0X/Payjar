@@ -575,6 +575,10 @@ def cmd_install(args):
 def cmd_sync(args):
     """Fast runtime sync: install only when declared dependencies or cached sources changed."""
     roots = remote_dependencies(project_dependencies())
+    if not roots:
+        if Path(LOCK).is_file() and read_lock().get("packages"):
+            lock_write([], replace_all=True, requirements={})
+        return
     if packages_ready(roots):
         return
     cmd_install(args)
