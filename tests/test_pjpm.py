@@ -1,3 +1,5 @@
+import argparse
+import contextlib
 import hashlib
 import io
 import json
@@ -52,6 +54,53 @@ class ManifestTests(unittest.TestCase):
                 'version="1.2.3+build.4"', 'language="python"', ""
             ]))
             self.assertEqual(pjpm.load_manifest(Path(directory))["version"], "1.2.3+build.4")
+
+    def test_search_exact_legacy_version(self):
+        fake_catalog = [
+            release("Geometry", "2.0.0"),
+            release("Geometry", "1.0"),
+        ]
+        with patch.object(pjpm, "registry_dirs", return_value=["Geometry"]), \
+             patch.object(pjpm, "registry_candidates", return_value=fake_catalog):
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                pjpm.cmd_search(argparse.Namespace(query="Geometry@1.0"))
+        self.assertEqual(out.getvalue().strip(), "Geometry 1.0 [python]")
+
+    def test_search_ranges_include_matching_historical_versions(self):
+        fake_catalog = [
+            release("example", "2.0.0"),
+            release("example", "1.3.0"),
+            release("example", "1.0.0"),
+        ]
+        with patch.object(pjpm, "registry_dirs", return_value=["example"]), \
+             patch.object(pjpm, "registry_candidates", return_value=fake_catalog):
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                pjpm.cmd_search(argparse.Namespace(query="exa@^1.0.0"))
+        self.assertIn("example 1.3.0", out.getvalue())
+        self.assertIn("example 1.0.0", out.getvalue())
+        self.assertNotIn("example 2.0.0", out.getvalue())
+
+    def test_info_exact_version(self):
+        fake_catalog = [release("Geometry", "2.0.0"), release("Geometry", "1.0")]
+        with patch.object(pjpm, "registry_candidates", return_value=fake_catalog):
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                pjpm.cmd_info(argparse.Namespace(package="Geometry@1.0"))
+        data = json.loads(out.getvalue())
+        self.assertEqual(data["version"], "1.0")
+        self.assertEqual(data["available_versions"], ["2.0.0", "1.0"])
+
+    def test_add_outside_project_has_actionable_error(self):
+        with tempfile.TemporaryDirectory() as directory:
+            old_dir = os.getcwd()
+            try:
+                os.chdir(directory)
+                with self.assertRaisesRegex(pjpm.PjpmError, "pjpm init"):
+                    pjpm.cmd_add(argparse.Namespace(package="Geometry@1.0"))
+            finally:
+                os.chdir(old_dir)
 
     def test_version_constraints(self):
         self.assertTrue(pjpm.version_ok("1.4.0", "^1.2.0"))
