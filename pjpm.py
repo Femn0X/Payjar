@@ -444,9 +444,14 @@ def resolve_graph(root_dependencies, locked=None):
 
 def cmd_add(args):
     name, constraint = parse_spec(args.package)
-    records = [install_package(meta) for meta in resolve_graph({name: constraint})]
+    manifest = load_manifest()
+    if manifest["format"] != "v2":
+        raise PjpmError("pjpm add requires a v2 pjpackage.toml; run pjpm init first")
+    roots = dict(manifest["dependencies"])
+    roots[name] = constraint
+    records = [install_package(meta) for meta in resolve_graph(roots)]
     add_dependency(name, constraint)
-    lock_write(records)
+    lock_write(records, replace_all=True)
 
 def lock_write(new_records, replace_all=False):
     p=Path(LOCK)
@@ -483,14 +488,20 @@ def cmd_install(args):
 def cmd_update(args):
     manifest = load_manifest()
     roots = manifest["dependencies"]
+    locked = {}
     if args.package:
         name = safe_name(args.package)
         if name not in roots:
             raise PjpmError(f"{name} is not a direct dependency")
-        roots = {name: roots[name]}
-    graph = resolve_graph(roots)
+        if Path(LOCK).exists():
+            try:
+                locked = {item["name"]: item for item in json.loads(Path(LOCK).read_text()).get("packages", [])}
+            except Exception as e:
+                raise PjpmError(f"invalid {LOCK}: {e}") from e
+        locked.pop(name, None)  # refresh requested package, retaining compatible other pins
+    graph = resolve_graph(roots, locked=locked)
     records = [install_package(meta) for meta in graph]
-    lock_write(records, replace_all=not bool(args.package))
+    lock_write(records, replace_all=True)
     print(f"updated {len(records)} package(s)")
 
 def cmd_remove(args):
