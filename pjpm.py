@@ -161,7 +161,9 @@ def command_for(adapter, entry=None, args=None):
     args=list(args or [])
     if adapter in ("python","python3"): return [shutil.which("python3") or sys.executable, *([entry] if entry else []), *args]
     if adapter in ("node","javascript","js"): return ["node", *([entry] if entry else []), *args]
-    if adapter in ("payjar","pj"): return ["PJC", *([entry] if entry else []), *args]
+    if adapter in ("payjar","pj"):
+        executable = "./PJC" if Path("PJC").is_file() else "PJC"
+        return [executable, *([entry] if entry else []), *args]
     if adapter in ("rust","cargo"): return ["cargo","run","--",*args]
     if adapter=="go": return ["go","run",*([entry] if entry else []),*args]
     if adapter in ("c","cpp","c++","cmake"): return ["cmake","--build","build","--",*args]
