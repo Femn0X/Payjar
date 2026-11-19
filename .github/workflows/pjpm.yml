@@ -1,0 +1,25 @@
+name: pjpm
+on:
+  push:
+    paths:
+      - "pjpm.py"
+      - "pjpm"
+      - "tests/test_pjpm.py"
+      - ".github/workflows/pjpm.yml"
+  pull_request:
+    paths:
+      - "pjpm.py"
+      - "pjpm"
+      - "tests/test_pjpm.py"
+      - ".github/workflows/pjpm.yml"
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python -m py_compile pjpm.py
+      - run: python -m unittest discover -s tests -v
+      - run: python pjpm.py --help
