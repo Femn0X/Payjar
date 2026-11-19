@@ -2,3 +2,8 @@
 # The interpreter always applies safe integer-constant folding.
 # Unsupported expressions continue through the normal interpreter.
 backend = "interpreter"
+
+# Optional project dependencies are installed with pjpm before execution.
+# Uncomment these lines (without the leading #) to try a registry package:
+# [dependencies]
+# Geometry = "1.0"
