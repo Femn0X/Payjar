@@ -197,10 +197,10 @@ def version_ok(version, constraint):
     for part in (x.strip() for x in constraint.split(",")):
         if not part or part == "*":
             continue
-        op = next((x for x in (">=", "<=", "!=", ">", "<", "^", "~", "=") if part.startswith(x)), "=")
+        op = next((x for x in (">=", "<=", "!=", ">", "<", "^", "~", "=") if part.startswith(x)), "")
         raw = part[len(op):].strip()
         bound = version_sort_key(raw)
-        if op == "=":
+        if op in ("", "="):
             ok = version == raw
         elif op == "!=":
             ok = version != raw
