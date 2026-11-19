@@ -30,6 +30,12 @@ def safe_name(name):
         raise PjpmError(f"invalid package name: {name!r}")
     return name
 
+def safe_version(version):
+    if not isinstance(version, str) or not re.fullmatch(r"[0-9A-Za-z][0-9A-Za-z._+-]*", version):
+        raise PjpmError(f"invalid package version: {version!r}")
+    return version
+
+
 def load_manifest(root=Path(".")):
     v2 = root / MANIFEST
     old = root / LEGACY
@@ -51,7 +57,7 @@ def load_manifest(root=Path(".")):
         try: d = tomllib.loads(old.read_text(encoding="utf-8"))
         except Exception as e: raise PjpmError(f"invalid legacy package.toml: {e}")
         name = root.resolve().name
-        return {"format":"legacy", "name":name, "version":str(d.get("version","0.0.0")),
+        return {"format":"legacy", "name":name, "version":safe_version(str(d.get("version","0.0.0"))),
                 "language":str(d.get("language","payjar")).lower(), "description":str(d.get("description","")),
                 "kind":"library", "build":{"adapter":str(d.get("language","payjar")).lower(),"legacy_build":d.get("build")},
                 "runtime":{"adapter":str(d.get("language","payjar")).lower(),"entry":"init.pj"},
@@ -102,7 +108,7 @@ def registry_index():
             if not isinstance(versions, dict) or not versions:
                 raise ValueError(f"{name}: versions must be a nonempty object")
             for version, entry in versions.items():
-                if not isinstance(version, str) or not isinstance(entry, dict):
+                if not isinstance(version, str) or not re.fullmatch(r"\d+\.\d+(?:\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?)?", version) or not isinstance(entry, dict):
                     raise ValueError(f"{name}: invalid release record")
                 commit = entry.get("commit")
                 if not isinstance(commit, str) or not re.fullmatch(r"[0-9a-f]{40}", commit):
@@ -138,7 +144,7 @@ def read_registry_manifest(name, ref, path):
             deps = data.get("dependencies", {})
             language = pkg.get("language", "unknown")
         else:
-            version = str(data.get("version", "0.0.0"))
+            version = safe_version(str(data.get("version", "0.0.0")))
             deps = {}
             language = data.get("language", "payjar")
         if not isinstance(deps, dict) or any(not isinstance(x, str) for x in deps.values()):
@@ -248,7 +254,7 @@ def project_root():
 
 def install_package(meta, expected_sha256=None):
     name = safe_name(meta["name"])
-    version = meta["version"]
+    version = safe_version(meta["version"])
     path = safe_registry_path(meta.get("path", name))
     commit = meta.get("commit")
     if commit is not None and not re.fullmatch(r"[0-9a-f]{40}", commit):
