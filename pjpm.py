@@ -41,7 +41,7 @@ def load_manifest(root=Path(".")):
         for key in ("name","version","language"):
             if not isinstance(p.get(key), str) or not p[key]: raise PjpmError(f"missing [package].{key}")
         safe_name(p["name"])
-        if not re.fullmatch(r"\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?", p["version"]):
+        if not re.fullmatch(r"\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?", p["version"]):
             raise PjpmError("package.version must be SemVer (for example 1.2.3)")
         p["kind"] = p.get("kind", "library")
         return {"format":"v2", "name":p["name"], "version":p["version"], "language":p["language"].lower(),
