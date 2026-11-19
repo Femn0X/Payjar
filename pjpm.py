@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Payjar package manager (pjpm). Requires Python 3.11+; standard library only."""
 from __future__ import annotations
-import argparse, functools, hashlib, json, os, re, shutil, subprocess, sys, tempfile, tomllib, urllib.error, urllib.parse, urllib.request, zipfile
+import argparse, functools, hashlib, io, json, os, re, shutil, subprocess, sys, tempfile, tomllib, urllib.error, urllib.parse, urllib.request, zipfile
 from pathlib import Path, PurePosixPath
 
 VERSION = "0.3.0"
@@ -191,27 +191,42 @@ def parse_spec(spec):
     return safe_name(spec), "*"
 
 def version_ok(version, constraint):
-    if constraint in ("","*","latest"): return True
-    def nums(v):
-        m=re.match(r"^(\d+)\.(\d+)\.(\d+)",v)
-        return tuple(map(int,m.groups())) if m else None
-    v=nums(version)
-    if not v: return version==constraint
+    if constraint in ("", "*", "latest"):
+        return True
+    value = version_sort_key(version)
     for part in (x.strip() for x in constraint.split(",")):
-        if not part or part=="*": continue
-        op=next((x for x in (">=","<=","!=",">","<","^","~","=") if part.startswith(x)), "=")
-        raw=part[len(op):].strip()
-        b=nums(raw)
-        if not b: return version==constraint
-        if op=="^": ok=v>=b and (v[0]==b[0] if b[0]>0 else (v[1]==b[1] if b[1]>0 else v[2]==b[2]))
-        elif op=="~": ok=v>=b and v[:2]==b[:2]
-        elif op==">=": ok=v>=b
-        elif op=="<=": ok=v<=b
-        elif op==">": ok=v>b
-        elif op=="<": ok=v<b
-        elif op=="!=": ok=v!=b
-        else: ok=v==b
-        if not ok: return False
+        if not part or part == "*":
+            continue
+        op = next((x for x in (">=", "<=", "!=", ">", "<", "^", "~", "=") if part.startswith(x)), "=")
+        raw = part[len(op):].strip()
+        bound = version_sort_key(raw)
+        if op == "=":
+            ok = version == raw
+        elif op == "!=":
+            ok = version != raw
+        elif value[0] < 0 or bound[0] < 0:
+            ok = False
+        elif op == "^":
+            major, minor, patch = bound[:3]
+            if major > 0:
+                upper = (major + 1, 0, 0)
+            elif minor > 0:
+                upper = (0, minor + 1, 0)
+            else:
+                upper = (0, 0, patch + 1)
+            ok = value >= bound and value[:3] < upper
+        elif op == "~":
+            ok = value >= bound and value[:2] == bound[:2]
+        elif op == ">=":
+            ok = value >= bound
+        elif op == "<=":
+            ok = value <= bound
+        elif op == ">":
+            ok = value > bound
+        else:
+            ok = value < bound
+        if not ok:
+            return False
     return True
 
 def add_dependency(name, constraint):
@@ -252,7 +267,7 @@ def install_package(meta, expected_sha256=None):
         return record
     dest.parent.mkdir(parents=True, exist_ok=True)
     try:
-        with zipfile.ZipFile(__import__("io").BytesIO(archive)) as z:
+        with zipfile.ZipFile(io.BytesIO(archive)) as z:
             prefix = None
             source_parts = PurePosixPath(path).parts
             for item in z.infolist():
@@ -405,7 +420,7 @@ def resolve_graph(root_dependencies, locked=None):
 
     solution = solve({}, requirements)
     if solution is None:
-        raise PjpmError(errors[-1] if errors else "unable to resolve dependencies")
+        raise PjpmError("; ".join(dict.fromkeys(errors[-6:])) if errors else "unable to resolve dependencies")
     return solution
 
 def cmd_add(args):
