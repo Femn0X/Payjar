@@ -262,15 +262,30 @@ def install_package(meta, expected_sha256=None):
     record = {"name": name, "version": version, "registry": REGISTRY,
               "commit": commit, "path": path, "sha256": digest}
     dest = Path(".pjpm/packages") / name / version
-    if dest.exists():
-        print(f"{name} {version} already installed")
-        return record
+    marker = dest / ".pjpm-source.json"
+    if dest.is_symlink():
+        raise PjpmError(f"unsafe installation directory: {dest}")
+    if dest.exists() and marker.is_file():
+        try:
+            current = json.loads(marker.read_text(encoding="utf-8"))
+            if current == record:
+                print(f"{name} {version} already installed")
+                return record
+        except (ValueError, OSError):
+            pass
+
+    # Extract into a temporary sibling. An incomplete extraction must not
+    # remove a previously installed version.
     dest.parent.mkdir(parents=True, exist_ok=True)
+    staging = Path(tempfile.mkdtemp(prefix=".pjpm-stage-", dir=dest.parent))
     try:
         with zipfile.ZipFile(io.BytesIO(archive)) as z:
             prefix = None
             source_parts = PurePosixPath(path).parts
-            for item in z.infolist():
+            entries = z.infolist()
+            if len(entries) > 20000 or sum(item.file_size for item in entries) > 512 * 1024 * 1024:
+                raise PjpmError("registry archive exceeds safety limits")
+            for item in entries:
                 parts = PurePosixPath(item.filename).parts
                 if item.filename.startswith("/") or ".." in parts:
                     raise PjpmError("registry archive contains an unsafe path")
@@ -279,14 +294,14 @@ def install_package(meta, expected_sha256=None):
                     break
             if prefix is None:
                 raise PjpmError(f"package directory {path!r} not found at source {ref}")
-            for item in z.infolist():
+            for item in entries:
                 if not item.filename.startswith(prefix):
                     continue
                 rel = PurePosixPath(item.filename[len(prefix):])
                 if not rel.parts:
                     continue
-                target = (dest / Path(*rel.parts)).resolve()
-                if dest.resolve() not in target.parents and target != dest.resolve():
+                target = (staging / Path(*rel.parts)).resolve()
+                if staging.resolve() not in target.parents and target != staging.resolve():
                     raise PjpmError("archive path escapes install directory")
                 if item.is_dir():
                     target.mkdir(parents=True, exist_ok=True)
@@ -294,8 +309,12 @@ def install_package(meta, expected_sha256=None):
                     target.parent.mkdir(parents=True, exist_ok=True)
                     with z.open(item) as source, target.open("wb") as output:
                         shutil.copyfileobj(source, output)
+        (staging / ".pjpm-source.json").write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
+        if dest.exists():
+            shutil.rmtree(dest)
+        staging.rename(dest)
     except Exception:
-        shutil.rmtree(dest, ignore_errors=True)
+        shutil.rmtree(staging, ignore_errors=True)
         raise
     print(f"installed {name} {version} -> {dest}")
     return record
