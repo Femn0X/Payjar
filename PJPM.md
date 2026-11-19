@@ -46,21 +46,36 @@ adapter = "python"
 entry = "src/main.py"
 
 [dependencies]
-# geometry = "^1.0.0"
+# Geometry = "1.0"
 ```
 
 Adapters available out of the box: Python, Node.js, Payjar (`PJC`), Rust/Cargo, Go, Java/Gradle, and CMake. A package can use any language by declaring `adapter = "custom"` with a `command = ["program", "arg"]` array. Commands are argument vectors, never shell strings. Install does not execute package build scripts.
 
-## Registry and compatibility
+## Versioned registry and compatibility (pjpm 0.3)
 
-The default registry is `https://github.com/Femn0X/Payjar-Packages`; override it with `PJPM_REGISTRY` pointing to another GitHub repository. Current registry layout is one folder per package. The client supports v2 `pjpackage.toml`, legacy `package.toml`, and legacy `init.pj` packages when inspecting local projects. Registry packages are fetched from the registry's `main` branch; version constraints are checked against its published manifest version. The client resolves transitive dependencies, detects cycles and conflicting constraints, and supports basic SemVer comparators (`^`, `~`, `>=`, `<=`, `>`, `<`, `!=`, exact versions, and comma-separated ranges). The current folder registry does not provide multiple historical versions, so constraints are checked against each package's current manifest version; it cannot select an older matching release.
+The default registry is `https://github.com/Femn0X/Payjar-Packages`; set `PJPM_REGISTRY` to a different GitHub repository URL to override it.
 
-Packages install under `.pjpm/packages/<name>/<version>`. `pjpm.lock` records exact versions and archive SHA-256 digests. Locked installs re-fetch the archive and verify the digest. This initial client does not claim transparent cross-language imports: use `pjpm run` or an explicit process boundary. Native/wasm ABI loading is not enabled.
+The registry may publish a root `releases.json` index (schema 1) containing any number of package versions. Each entry has a **full immutable Git commit SHA** and a package path within that commit. `pjpm` reads and validates each pinned package manifest, selects a compatible version, resolves its transitive dependencies, and downloads the source from that fixed commit. The dependency resolver can backtrack when the newest release causes a constraint conflict. New v2 releases use SemVer; legacy releases such as `Geometry@1.0` keep their original version strings.
+
+When a package does not have an index entry, `pjpm` falls back to its original root folder on the registry's `main` branch, supporting existing `pjpackage.toml`, `package.toml`, and `init.pj` layouts. Such **unindexed legacy sources are mutable**, unlike indexed releases.
+
+```sh
+pjpm add Geometry@1.0
+pjpm install
+pjpm info Geometry
+pjpm update              # explicitly select newer compatible releases
+```
+
+`pjpm install` prefers versions and source commits already recorded in `pjpm.lock`. `pjpm update` selects the newest compatible releases instead. The lockfile stores the exact version, registry, source commit/path when indexed, and the SHA-256 digest of the downloaded source archive. Install verifies the saved digest, even when a copy of the package is already present. Cached packages live under `.pjpm/packages/<name>/<version>`; extraction is staged before replacing an installed version, and a `.pjpm-source.json` file records which archive produced it.
+
+Supported constraints include exact versions, `^`, `~`, `>=`, `<=`, `>`, `<`, `!=`, and comma-separated ranges. `pjpm search` and `pjpm info` can discover indexed releases and root-format packages.
 
 ## Security and limitations
 
-- Builds require explicit approval; `--approve-build` is an explicit opt-in.
-- Manifest commands are arrays; no shell interpolation or shell parsing occurs.
-- Registry ZIP paths are checked against traversal before extraction.
-- Installing a package copies source files; it does not execute them.
-- Registry publishing, signed metadata, transitive dependency resolution, sandboxed builds, and WASI/native ABI bridges are not implemented in this first working release.
+- Installing copies package source and **does not run package build scripts**. Builds require explicit approval (`--approve-build` is an explicit opt-in).
+- Manifest commands use argument arrays rather than shell strings; **builds and runs are not sandboxed**.
+- Source paths and ZIP extraction paths are validated. The installer rejects archives exceeding 20,000 entries or 512 MiB of declared uncompressed data. It still downloads the whole repository archive for each source commit; dedicated package archives are future work.
+- Release entries must point to full commit SHAs, but release metadata is **not cryptographically signed** and is not currently audited against previous registry entries. GitHub repository permissions and review policies remain important.
+- Publishing automation, signed provenance, a package-level artifact registry, a cross-language ABI, and WASI/native execution bridges are not implemented yet. Authoring packages in different languages does not imply transparent imports between those languages.
+
+Run the unit tests with `python -m unittest discover -s tests -v`.
