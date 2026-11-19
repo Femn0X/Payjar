@@ -4,7 +4,7 @@ from __future__ import annotations
 import argparse, hashlib, json, os, re, shutil, subprocess, sys, tempfile, tomllib, urllib.error, urllib.parse, urllib.request, zipfile
 from pathlib import Path, PurePosixPath
 
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 REGISTRY = os.environ.get("PJPM_REGISTRY", "https://github.com/Femn0X/Payjar-Packages")
 API = "https://api.github.com"
 LOCK = "pjpm.lock"
@@ -80,7 +80,7 @@ def registry_manifest(name):
         except PjpmError: continue
         if filename==MANIFEST:
             p=d.get("package",{})
-            return {"name":p.get("name",name),"version":p.get("version","0.0.0"),"language":p.get("language","unknown"),"manifest":filename}
+            return {"name":p.get("name",name),"version":p.get("version","0.0.0"),"language":p.get("language","unknown"),"manifest":filename,"dependencies":d.get("dependencies",{})}
         return {"name":name,"version":str(d.get("version","0.0.0")),"language":d.get("language","payjar"),"manifest":filename}
     raise PjpmError(f"package {name!r} has no readable manifest in registry")
 
@@ -93,18 +93,26 @@ def parse_spec(spec):
 def version_ok(version, constraint):
     if constraint in ("","*","latest"): return True
     def nums(v):
-        m=re.match(r"^(\d+)\.(\d+)\.(\d+)",v)
+        m=re.match(r"^(\\d+)\\.(\\d+)\\.(\\d+)",v)
         return tuple(map(int,m.groups())) if m else None
     v=nums(version)
     if not v: return version==constraint
-    if constraint.startswith("^") or constraint.startswith("~"):
-        b=nums(constraint[1:])
-        if not b:return False
-        return v>=b and (v[0]==b[0] if constraint[0]=="^" else v[:2]==b[:2])
-    if constraint.startswith(">="):
-        b=nums(constraint[2:]); return bool(b and v>=b)
-    b=nums(constraint)
-    return v==b if b else version==constraint
+    for part in (x.strip() for x in constraint.split(",")):
+        if not part or part=="*": continue
+        op=next((x for x in (">=","<=","!=",">","<","^","~","=") if part.startswith(x)), "=")
+        raw=part[len(op):].strip()
+        b=nums(raw)
+        if not b: return version==constraint
+        if op=="^": ok=v>=b and (v[0]==b[0] if b[0]>0 else (v[1]==b[1] if b[1]>0 else v[2]==b[2]))
+        elif op=="~": ok=v>=b and v[:2]==b[:2]
+        elif op==">=": ok=v>=b
+        elif op=="<=": ok=v<=b
+        elif op==">": ok=v>b
+        elif op=="<": ok=v<b
+        elif op=="!=": ok=v!=b
+        else: ok=v==b
+        if not ok: return False
+    return True
 
 def add_dependency(name, constraint):
     path=Path(MANIFEST)
@@ -205,11 +213,37 @@ def cmd_create(args):
     finally: os.chdir(old)
     print(f"created project ./{name}")
 
+def resolve_graph(root_dependencies):
+    """Resolve registry dependencies and reject cycles or incompatible constraints."""
+    selected = {}
+    visiting = []
+    ordered = []
+    def visit(name, constraint):
+        name = safe_name(name)
+        if name in selected:
+            if not version_ok(selected[name]["version"], constraint):
+                raise PjpmError(f"dependency conflict for {name}: selected {selected[name]['version']} does not satisfy {constraint}")
+            return
+        if name in visiting:
+            raise PjpmError("dependency cycle detected: " + " -> ".join(visiting + [name]))
+        visiting.append(name)
+        meta = registry_manifest(name)
+        if not version_ok(meta["version"], constraint):
+            raise PjpmError(f"{name}: registry has {meta['version']}, which does not satisfy {constraint}; only the current registry version is available")
+        selected[name] = meta
+        for child, child_constraint in sorted(meta.get("dependencies", {}).items()):
+            visit(child, str(child_constraint))
+        visiting.pop()
+        ordered.append((name, constraint))
+    for name, constraint in sorted(root_dependencies.items()):
+        visit(name, str(constraint))
+    return ordered
+
 def cmd_add(args):
     name,constraint=parse_spec(args.package)
+    records=[install_package(dep, req) for dep,req in resolve_graph({name:constraint})]
     add_dependency(name,constraint)
-    rec=install_package(name,constraint)
-    lock_write([rec])
+    lock_write(records)
 
 def lock_write(new_records):
     p=Path(LOCK)
@@ -218,28 +252,36 @@ def lock_write(new_records):
         try: current={x["name"]:x for x in json.loads(p.read_text()).get("packages",[])}
         except Exception: pass
     for r in new_records: current[r["name"]]=r
-    data={"lock_version":1,"packages":[current[k] for k in sorted(current)]}
-    p.write_text(json.dumps(data,indent=2)+"\n")
+    p.write_text(json.dumps({"lock_version":1,"packages":[current[k] for k in sorted(current)]},indent=2)+"\n")
 
 def cmd_install(args):
     m=load_manifest()
-    deps=m["dependencies"]
-    records=[]
     lock=Path(LOCK)
     locked={}
     if lock.exists():
         try: locked={x["name"]:x for x in json.loads(lock.read_text()).get("packages",[])}
         except Exception as e: raise PjpmError(f"invalid {LOCK}: {e}")
-    for name,constraint in sorted(deps.items()):
-        name=safe_name(name)
-        if name in locked and version_ok(locked[name]["version"],constraint):
-            # Still fetch and verify current archive digest before trusting lock metadata.
-            rec=install_package(name,locked[name]["version"])
-            if rec["sha256"]!=locked[name].get("sha256"): raise PjpmError(f"integrity mismatch for {name}")
-        else: rec=install_package(name,constraint)
+    graph=resolve_graph(m["dependencies"])
+    records=[]
+    for name,constraint in graph:
+        rec=install_package(name,constraint)
+        if name in locked and locked[name].get("version")==rec["version"] and locked[name].get("sha256")!=rec["sha256"]:
+            raise PjpmError(f"integrity mismatch for {name}: registry archive changed since lockfile creation")
         records.append(rec)
     lock_write(records)
-    print(f"installed {len(records)} dependency/dependencies")
+    print(f"installed {len(records)} package(s), including transitive dependencies")
+
+def cmd_update(args):
+    m=load_manifest()
+    roots=m["dependencies"]
+    if args.package:
+        name=safe_name(args.package)
+        if name not in roots: raise PjpmError(f"{name} is not a direct dependency")
+        roots={name:roots[name]}
+    graph=resolve_graph(roots)
+    records=[install_package(name,constraint) for name,constraint in graph]
+    lock_write(records)
+    print(f"updated {len(records)} package(s)")
 
 def cmd_remove(args):
     name=safe_name(args.package)
