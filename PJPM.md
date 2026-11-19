@@ -18,7 +18,8 @@ Or run directly with `python3 pjpm.py`. To make it available globally, copy `pjp
 - `pjpm init [name]` — create a v2 manifest in the current directory.
 - `pjpm create <name>` — create a project directory and manifest.
 - `pjpm add <name>[@constraint]` — add and install a registry dependency.
-- `pjpm install` — install manifest dependencies and update `pjpm.lock`.
+- `pjpm install` — install `pjpackage.toml` and/or `config.toml` dependencies and update `pjpm.lock`.
+- `pjpm sync` — install only missing/outdated configured dependencies, skip network when the local lock and cache are current.
 - `pjpm remove <name>` / `uninstall <name>` — remove a dependency.
 - `pjpm search <query>` or `search <name>@<constraint>` — discover packages and versions (for example `Geometry@1.0`).
 - `pjpm info <name>[@constraint]`, `list` — inspect a specific release or list installed packages.
@@ -26,6 +27,26 @@ Or run directly with `python3 pjpm.py`. To make it available globally, copy `pjp
 - `pjpm run [args...]` — run the declared runtime entry point.
 - `pjpm doctor` — show available language toolchains.
 - `pjpm pack` — create a source archive and print its SHA-256 digest.
+
+## Automatic dependencies from `config.toml`
+
+Payjar now supports automatic installation of declared registry dependencies **before running a .pj program**. Add this section to your project's `config.toml`:
+
+```toml
+backend = "interpreter"
+
+[dependencies]
+Geometry = "1.0"
+# Future v2 packages may use constraints such as ^1.2.0
+```
+
+Run `Payjar main.pj` as usual. The interpreter runs `pjpm sync` in the project directory when the config contains a `[dependencies]` table. It prefers a local `./Geometry/init.pj` if present, otherwise installs the requested version under `.pjpm/packages/Geometry/1.0/`. When the lockfile and installed files match the declarations, `pjpm sync` skips network access. The package's exact version/source commit is recorded in `pjpm.lock`; commit the lockfile for reproducible projects, but not the downloaded `.pjpm/` directory.
+
+The project directory is normally the current working directory. When running a script from another directory, Payjar also recognizes a `config.toml` alongside the script. You can install without running code via `python3 /path/to/pjpm.py install` or `python3 /path/to/pjpm.py sync` from the project directory. For standalone binaries, place `pjpm` on PATH or set `PAYJAR_PJPM=/absolute/path/to/pjpm.py`. Python 3.11+ is required.
+
+**Import behavior:** Only Payjar packages containing a valid `init.pj` can be imported directly. A Python, Rust, JavaScript, or other-language package can be downloaded and managed, but must expose a separately supported runtime bridge to be callable from Payjar; installing a package does **not** automatically transpile it.
+
+**Safety:** Automatic installation only applies to packages explicitly declared in `config.toml`. Downloading/installing is non-executing; builds or custom package commands are not run automatically. Running imported Payjar source executes that code, so only use registries and packages you trust.
 
 ## Adding dependencies to a project
 
