@@ -102,6 +102,75 @@ class ManifestTests(unittest.TestCase):
             finally:
                 os.chdir(old_dir)
 
+    def write_config(self, version='"1.0"'):
+        Path("config.toml").write_text(chr(10).join([
+            "[dependencies]", "Geometry = " + version, ""
+        ]))
+
+    def test_config_only_dependencies(self):
+        with tempfile.TemporaryDirectory() as directory:
+            cwd = os.getcwd()
+            try:
+                os.chdir(directory)
+                self.write_config()
+                self.assertEqual(pjpm.project_dependencies(), {"Geometry": "1.0"})
+            finally:
+                os.chdir(cwd)
+
+    def test_config_rejects_non_string_constraints(self):
+        with tempfile.TemporaryDirectory() as directory:
+            cwd = os.getcwd()
+            try:
+                os.chdir(directory)
+                self.write_config("1.0")
+                with self.assertRaisesRegex(pjpm.PjpmError, "constraint string"):
+                    pjpm.project_dependencies()
+            finally:
+                os.chdir(cwd)
+
+    def test_sync_skips_existing_local_package(self):
+        with tempfile.TemporaryDirectory() as directory:
+            cwd = os.getcwd()
+            try:
+                os.chdir(directory)
+                self.write_config()
+                Path("Geometry").mkdir()
+                Path("Geometry/init.pj").write_text("package Geometry;")
+                with patch.object(pjpm, "resolve_graph") as resolve:
+                    pjpm.cmd_sync(argparse.Namespace())
+                resolve.assert_not_called()
+                self.assertFalse(Path(".pjpm").exists())
+            finally:
+                os.chdir(cwd)
+
+    def test_sync_installs_only_when_missing_and_caches_lock(self):
+        with tempfile.TemporaryDirectory() as directory:
+            cwd = os.getcwd()
+            try:
+                os.chdir(directory)
+                self.write_config()
+                meta = release("Geometry", "1.0", commit="a" * 40)
+                record = {"name": "Geometry", "version": "1.0", "registry": pjpm.REGISTRY,
+                          "commit": "a" * 40, "path": "Geometry", "sha256": "e" * 64}
+
+                def fake_install(_meta, expected_sha256=None):
+                    root = Path(".pjpm/packages/Geometry/1.0")
+                    root.mkdir(parents=True, exist_ok=True)
+                    (root / "init.pj").write_text("package Geometry;")
+                    (root / ".pjpm-source.json").write_text(json.dumps(record))
+                    return record
+
+                with patch.object(pjpm, "resolve_graph", return_value=[meta]) as resolve, \
+                     patch.object(pjpm, "install_package", side_effect=fake_install) as install:
+                    pjpm.cmd_sync(argparse.Namespace())
+                    pjpm.cmd_sync(argparse.Namespace())
+                self.assertEqual(resolve.call_count, 1)
+                self.assertEqual(install.call_count, 1)
+                self.assertEqual(pjpm.read_lock()["project_dependencies"], {"Geometry": "1.0"})
+                self.assertTrue(Path(".pjpm/packages/Geometry/1.0/init.pj").is_file())
+            finally:
+                os.chdir(cwd)
+
     def test_version_constraints(self):
         self.assertTrue(pjpm.version_ok("1.4.0", "^1.2.0"))
         self.assertFalse(pjpm.version_ok("2.0.0", "^1.2.0"))

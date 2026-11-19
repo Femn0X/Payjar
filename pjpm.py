@@ -235,6 +235,81 @@ def version_ok(version, constraint):
             return False
     return True
 
+def project_dependencies():
+    """Merge project v2 dependencies with config.toml [dependencies]."""
+    dependencies = {}
+    if Path(MANIFEST).is_file() or Path(LEGACY).is_file() or Path("init.pj").is_file():
+        dependencies.update(load_manifest()["dependencies"])
+    config = Path("config.toml")
+    if config.is_file():
+        try:
+            data = tomllib.loads(config.read_text(encoding="utf-8"))
+        except (ValueError, OSError) as e:
+            raise PjpmError(f"invalid config.toml: {e}") from e
+        declared = data.get("dependencies", {})
+        if not isinstance(declared, dict):
+            raise PjpmError("config.toml [dependencies] must be a TOML table")
+        for name, constraint in declared.items():
+            safe_name(name)
+            if not isinstance(constraint, str) or not constraint.strip():
+                raise PjpmError(f"config.toml: {name} must have a nonempty version constraint string")
+            if name in dependencies and dependencies[name] != constraint:
+                raise PjpmError(f"{name}: config.toml and pjpackage.toml specify different constraints")
+            dependencies[name] = constraint
+    if not dependencies and not (Path(MANIFEST).exists() or Path(LEGACY).exists()
+                                 or Path("init.pj").exists() or config.is_file()):
+        raise PjpmError("no project manifest or config.toml found in the current directory")
+    return dependencies
+
+
+def remote_dependencies(dependencies):
+    """Existing local Payjar package sources take precedence over registry entries."""
+    return {name: requirement for name, requirement in dependencies.items()
+            if not (Path(name) / "init.pj").is_file()}
+
+
+def read_lock():
+    path = Path(LOCK)
+    if not path.is_file():
+        return {}
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (ValueError, OSError) as e:
+        raise PjpmError(f"invalid {LOCK}: {e}") from e
+    if not isinstance(value, dict) or not isinstance(value.get("packages", []), list):
+        raise PjpmError(f"invalid {LOCK}: expected object with packages list")
+    return value
+
+
+def packages_ready(requirements):
+    """No network is needed if the exact dependency set and cached packages match the lock."""
+    lock = read_lock()
+    if lock.get("project_dependencies") != requirements:
+        return False
+    records = lock.get("packages", [])
+    pinned = {item["name"]: item for item in records if isinstance(item, dict) and "name" in item}
+    if any(name not in pinned or not version_ok(pinned[name].get("version", ""), constraint)
+           for name, constraint in requirements.items()):
+        return False
+    for item in records:
+        if not isinstance(item, dict):
+            return False
+        try:
+            name = safe_name(item["name"])
+            version = safe_version(item["version"])
+        except (KeyError, PjpmError, TypeError):
+            return False
+        source_file = Path(".pjpm/packages") / name / version / ".pjpm-source.json"
+        if not source_file.is_file():
+            return False
+        try:
+            if json.loads(source_file.read_text(encoding="utf-8")) != item:
+                return False
+        except (OSError, ValueError):
+            return False
+    return True
+
+
 def add_dependency(name, constraint):
     path=Path(MANIFEST)
     if not path.exists(): raise PjpmError("pjpm add requires a v2 pjpackage.toml; run pjpm init first")
@@ -463,27 +538,26 @@ def cmd_add(args):
     roots[name] = constraint
     records = [install_package(meta) for meta in resolve_graph(roots)]
     add_dependency(name, constraint)
-    lock_write(records, replace_all=True)
+    lock_write(records, replace_all=True, requirements=remote_dependencies(project_dependencies()))
 
-def lock_write(new_records, replace_all=False):
-    p=Path(LOCK)
-    current={}
+def lock_write(new_records, replace_all=False, requirements=None):
+    p = Path(LOCK)
+    current = {}
     if not replace_all and p.exists():
-        try: current={x["name"]:x for x in json.loads(p.read_text()).get("packages",[])}
-        except Exception: pass
-    for r in new_records: current[r["name"]]=r
-    p.write_text(json.dumps({"lock_version":1,"packages":[current[k] for k in sorted(current)]},indent=2)+"\n")
+        current = {item["name"]: item for item in read_lock().get("packages", [])}
+    for record in new_records:
+        current[record["name"]] = record
+    result = {"lock_version": 1, "packages": [current[key] for key in sorted(current)]}
+    if requirements is not None:
+        result["project_dependencies"] = requirements
+    p.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+
 
 def cmd_install(args):
-    manifest = load_manifest()
-    lock = Path(LOCK)
-    locked = {}
-    if lock.exists():
-        try:
-            locked = {item["name"]: item for item in json.loads(lock.read_text()).get("packages", [])}
-        except Exception as e:
-            raise PjpmError(f"invalid {LOCK}: {e}") from e
-    graph = resolve_graph(manifest["dependencies"], locked=locked)
+    roots = remote_dependencies(project_dependencies())
+    existing = read_lock()
+    locked = {item["name"]: item for item in existing.get("packages", [])}
+    graph = resolve_graph(roots, locked=locked)
     records = []
     for meta in graph:
         name = meta["name"]
@@ -494,27 +568,36 @@ def cmd_install(args):
                 raise PjpmError(f"{name}: release source changed since locking; run pjpm update to choose a new release")
             expected = old.get("sha256")
         records.append(install_package(meta, expected_sha256=expected))
-    lock_write(records, replace_all=True)
+    lock_write(records, replace_all=True, requirements=roots)
     print(f"installed {len(records)} package(s), including transitive dependencies")
 
+
+def cmd_sync(args):
+    """Fast runtime sync: install only when declared dependencies or cached sources changed."""
+    roots = remote_dependencies(project_dependencies())
+    if not roots:
+        if Path(LOCK).is_file() and read_lock().get("packages"):
+            lock_write([], replace_all=True, requirements={})
+        return
+    if packages_ready(roots):
+        return
+    cmd_install(args)
+
+
 def cmd_update(args):
-    manifest = load_manifest()
-    roots = manifest["dependencies"]
+    roots = remote_dependencies(project_dependencies())
     locked = {}
     if args.package:
         name = safe_name(args.package)
         if name not in roots:
-            raise PjpmError(f"{name} is not a direct dependency")
-        if Path(LOCK).exists():
-            try:
-                locked = {item["name"]: item for item in json.loads(Path(LOCK).read_text()).get("packages", [])}
-            except Exception as e:
-                raise PjpmError(f"invalid {LOCK}: {e}") from e
-        locked.pop(name, None)  # refresh requested package, retaining compatible other pins
+            raise PjpmError(f"{name} is not a registry dependency")
+        locked = {item["name"]: item for item in read_lock().get("packages", [])}
+        locked.pop(name, None)
     graph = resolve_graph(roots, locked=locked)
     records = [install_package(meta) for meta in graph]
-    lock_write(records, replace_all=True)
+    lock_write(records, replace_all=True, requirements=roots)
     print(f"updated {len(records)} package(s)")
+
 
 def cmd_remove(args):
     name=safe_name(args.package)
@@ -605,6 +688,7 @@ def main():
     p=sub.add_parser("create"); p.add_argument("name"); p.set_defaults(fn=cmd_create)
     p=sub.add_parser("add"); p.add_argument("package"); p.set_defaults(fn=cmd_add)
     p=sub.add_parser("install"); p.set_defaults(fn=cmd_install)
+    p=sub.add_parser("sync"); p.set_defaults(fn=cmd_sync)
     p=sub.add_parser("remove"); p.add_argument("package"); p.set_defaults(fn=cmd_remove)
     p=sub.add_parser("uninstall"); p.add_argument("package"); p.set_defaults(fn=cmd_remove)
     p=sub.add_parser("list"); p.set_defaults(fn=cmd_list)

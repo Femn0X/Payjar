@@ -1,0 +1,5 @@
+# This project has no pjpackage.toml; the runtime uses this config directly.
+backend = "interpreter"
+
+[dependencies]
+Geometry = "1.0.1"

@@ -1,0 +1,5 @@
+import Geometry;
+
+public class main(@self){
+    println(hypot(3.0,4.0));
+}

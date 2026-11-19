@@ -9,6 +9,7 @@ pub mod gui_channel;
 pub mod jit;
 pub mod asm;
 pub mod asm_vm;
+mod package_manager;
 
 // Re-export everything callers need
 pub use ast::{AstNode, NodeType};
@@ -19,6 +20,7 @@ use std::cell::RefCell;
 // Faster non-cryptographic hashing for interpreter symbol tables.
 use rustc_hash::FxHashMap as HashMap;
 use std::fs;
+use std::path::PathBuf;
 use std::io::{self, BufRead, Write};
 use std::process;
 use std::rc::Rc;
@@ -478,6 +480,7 @@ impl Scope {
 // ============================================================
 
 pub struct Env {
+    pub package_root: PathBuf,
     pub funcs: HashMap<String, AstNode>,
     pub classes: HashMap<String, AstNode>,
     /// Enum type name -> ordered list of variant names.
@@ -489,6 +492,7 @@ impl Env {
     pub fn new() -> Self {
         install_quiet_panic_hook();
         let mut env = Env {
+            package_root: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             funcs: HashMap::default(),
             classes: HashMap::default(),
             enums: HashMap::default(),
@@ -1528,9 +1532,12 @@ fn load_folder_package(env: &mut Env, pkg_name: &str, alias: Option<&str>, debug
     if pkg_name.is_empty() || !pkg_name.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-') {
         eprintln!("Import Error: invalid package name '{}'", pkg_name); process::exit(1);
     }
-    let init_path = format!("{}/init.pj", pkg_name);
-    let src = fs::read_to_string(&init_path).unwrap_or_else(|_| {
-        eprintln!("Import Error: cannot open '{}' for package '{}'", init_path, pkg_name); process::exit(1);
+    let init_path = package_manager::package_init_path(&env.package_root, pkg_name)
+        .unwrap_or_else(|msg| { eprintln!("Import Error: {}", msg); process::exit(1); })
+        .display().to_string();
+    let src = fs::read_to_string(&init_path).unwrap_or_else(|err| {
+        eprintln!("Import Error: cannot read '{}' for package '{}': {}", init_path, pkg_name, err);
+        process::exit(1);
     });
     let tokens = tokenize(&src);
     match detect_package(&tokens) {
@@ -1599,6 +1606,11 @@ pub fn interpret_file(path: &str, debug: bool) {
     }
     let imports = collect_imports(&tokens);
     let mut env = Env::new();
+    env.package_root = package_manager::project_root_for_script(std::path::Path::new(path));
+    if let Err(message) = package_manager::sync_config_dependencies(&env.package_root) {
+        eprintln!("Dependency Error: {}", message);
+        process::exit(1);
+    }
     for (pkg_name, alias) in &imports {
         load_folder_package(&mut env, pkg_name, alias.as_deref(), debug);
     }
@@ -1623,6 +1635,10 @@ pub fn interpret(code: &str, debug: bool) {
     }
     let imports = collect_imports(&tokens);
     let mut env = Env::new();
+    if let Err(message) = package_manager::sync_config_dependencies(&env.package_root) {
+        eprintln!("Dependency Error: {}", message);
+        process::exit(1);
+    }
     for (pkg_name, alias) in &imports {
         load_folder_package(&mut env, pkg_name, alias.as_deref(), debug);
     }
@@ -1652,6 +1668,10 @@ pub fn interpret_repl(env: &mut Env, code: &str, debug: bool) {
         println!("==============");
     }
     let imports = collect_imports(&tokens);
+    if let Err(message) = package_manager::sync_config_dependencies(&env.package_root) {
+        eprintln!("Dependency Error: {}", message);
+        return;
+    }
     for (pkg_name, alias) in &imports {
         load_folder_package(env, pkg_name, alias.as_deref(), debug);
     }
