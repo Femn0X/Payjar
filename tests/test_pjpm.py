@@ -40,6 +40,18 @@ class ManifestTests(unittest.TestCase):
             (Path(d) / "init.pj").write_text('print("ok")')
             self.assertEqual(pjpm.load_manifest(Path(d))["format"], "legacy-init")
 
+    def test_reject_unsafe_version_paths(self):
+        for version in ("../outside", "1.0/../../outside", "1.0\\\\unsafe", ".", ".."):
+            with self.subTest(version=version), self.assertRaises(pjpm.PjpmError):
+                pjpm.safe_version(version)
+
+    def test_v2_manifest_accepts_build_metadata(self):
+        with tempfile.TemporaryDirectory() as directory:
+            (Path(directory) / "pjpackage.toml").write_text(
+                '[package]\\nschema=2\\nname="demo"\\nversion="1.2.3+build.4"\\nlanguage="python"\\n'
+            )
+            self.assertEqual(pjpm.load_manifest(Path(directory))["version"], "1.2.3+build.4")
+
     def test_version_constraints(self):
         self.assertTrue(pjpm.version_ok("1.4.0", "^1.2.0"))
         self.assertFalse(pjpm.version_ok("2.0.0", "^1.2.0"))
