@@ -93,7 +93,7 @@ def parse_spec(spec):
 def version_ok(version, constraint):
     if constraint in ("","*","latest"): return True
     def nums(v):
-        m=re.match(r"^(\\d+)\\.(\\d+)\\.(\\d+)",v)
+        m=re.match(r"^(\d+)\.(\d+)\.(\d+)",v)
         return tuple(map(int,m.groups())) if m else None
     v=nums(version)
     if not v: return version==constraint
@@ -220,12 +220,12 @@ def resolve_graph(root_dependencies):
     ordered = []
     def visit(name, constraint):
         name = safe_name(name)
+        if name in visiting:
+            raise PjpmError("dependency cycle detected: " + " -> ".join(visiting + [name]))
         if name in selected:
             if not version_ok(selected[name]["version"], constraint):
                 raise PjpmError(f"dependency conflict for {name}: selected {selected[name]['version']} does not satisfy {constraint}")
             return
-        if name in visiting:
-            raise PjpmError("dependency cycle detected: " + " -> ".join(visiting + [name]))
         visiting.append(name)
         meta = registry_manifest(name)
         if not version_ok(meta["version"], constraint):
@@ -245,10 +245,10 @@ def cmd_add(args):
     add_dependency(name,constraint)
     lock_write(records)
 
-def lock_write(new_records):
+def lock_write(new_records, replace_all=False):
     p=Path(LOCK)
     current={}
-    if p.exists():
+    if not replace_all and p.exists():
         try: current={x["name"]:x for x in json.loads(p.read_text()).get("packages",[])}
         except Exception: pass
     for r in new_records: current[r["name"]]=r
@@ -268,7 +268,7 @@ def cmd_install(args):
         if name in locked and locked[name].get("version")==rec["version"] and locked[name].get("sha256")!=rec["sha256"]:
             raise PjpmError(f"integrity mismatch for {name}: registry archive changed since lockfile creation")
         records.append(rec)
-    lock_write(records)
+    lock_write(records, replace_all=True)
     print(f"installed {len(records)} package(s), including transitive dependencies")
 
 def cmd_update(args):
