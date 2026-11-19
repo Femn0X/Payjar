@@ -47,9 +47,10 @@ class ManifestTests(unittest.TestCase):
 
     def test_v2_manifest_accepts_build_metadata(self):
         with tempfile.TemporaryDirectory() as directory:
-            (Path(directory) / "pjpackage.toml").write_text(
-                '[package]\\nschema=2\\nname="demo"\\nversion="1.2.3+build.4"\\nlanguage="python"\\n'
-            )
+            (Path(directory) / "pjpackage.toml").write_text(chr(10).join([
+                "[package]", "schema=2", 'name="demo"',
+                'version="1.2.3+build.4"', 'language="python"', ""
+            ]))
             self.assertEqual(pjpm.load_manifest(Path(directory))["version"], "1.2.3+build.4")
 
     def test_version_constraints(self):
