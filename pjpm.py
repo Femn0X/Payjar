@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Payjar package manager (pjpm). Requires Python 3.11+; standard library only."""
 from __future__ import annotations
-import argparse, hashlib, json, os, re, shutil, subprocess, sys, tempfile, tomllib, urllib.error, urllib.parse, urllib.request, zipfile
+import argparse, functools, hashlib, json, os, re, shutil, subprocess, sys, tempfile, tomllib, urllib.error, urllib.parse, urllib.request, zipfile
 from pathlib import Path, PurePosixPath
 
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 REGISTRY = os.environ.get("PJPM_REGISTRY", "https://github.com/Femn0X/Payjar-Packages")
 API = "https://api.github.com"
 LOCK = "pjpm.lock"
@@ -13,11 +13,15 @@ LEGACY = "package.toml"
 
 class PjpmError(Exception): pass
 
-def http(url, binary=False):
-    req = urllib.request.Request(url, headers={"User-Agent":"pjpm/0.1", "Accept":"application/vnd.github+json"})
+def http(url, binary=False, missing_ok=False):
+    req = urllib.request.Request(url, headers={"User-Agent":"pjpm/0.3", "Accept":"application/vnd.github+json"})
     try:
         with urllib.request.urlopen(req, timeout=30) as res:
             return res.read() if binary else res.read().decode("utf-8")
+    except urllib.error.HTTPError as e:
+        if missing_ok and e.code == 404:
+            return None
+        raise PjpmError(f"request failed: {url}: {e}") from e
     except Exception as e:
         raise PjpmError(f"request failed: {url}: {e}") from e
 
@@ -66,23 +70,119 @@ def registry_repo():
 def registry_dirs():
     repo = registry_repo()
     data = json.loads(http(f"{API}/repos/{repo}/git/trees/HEAD?recursive=1"))
-    dirs=set()
-    for item in data.get("tree",[]):
-        parts=item.get("path","").split("/")
-        if len(parts)>1 and item.get("type")=="blob": dirs.add(parts[0])
-    return sorted(d for d in dirs if d not in (".github",))
+    roots = set()
+    for item in data.get("tree", []):
+        parts = item.get("path", "").split("/")
+        if len(parts) == 2 and item.get("type") == "blob" and parts[1] in (MANIFEST, LEGACY, "init.pj"):
+            roots.add(parts[0])
+    return sorted(roots | set(registry_index()))
 
-def registry_manifest(name):
-    repo=registry_repo()
+
+def safe_registry_path(path):
+    if not isinstance(path, str) or not path or "\\" in path:
+        raise PjpmError(f"invalid registry source path: {path!r}")
+    p = PurePosixPath(path)
+    if p.is_absolute() or any(x in (".", "..", "") for x in path.split("/")):
+        raise PjpmError(f"unsafe registry source path: {path!r}")
+    return path
+
+
+@functools.lru_cache(maxsize=1)
+def registry_index():
+    repo = registry_repo()
+    raw = http(f"https://raw.githubusercontent.com/{repo}/main/releases.json", missing_ok=True)
+    if raw is None:
+        return {}
+    try:
+        doc = json.loads(raw)
+        if not isinstance(doc, dict) or doc.get("schema") != 1 or not isinstance(doc.get("packages"), dict):
+            raise ValueError("expected schema 1 and packages object")
+        for name, versions in doc["packages"].items():
+            safe_name(name)
+            if not isinstance(versions, dict) or not versions:
+                raise ValueError(f"{name}: versions must be a nonempty object")
+            for version, entry in versions.items():
+                if not isinstance(version, str) or not isinstance(entry, dict):
+                    raise ValueError(f"{name}: invalid release record")
+                commit = entry.get("commit")
+                if not isinstance(commit, str) or not re.fullmatch(r"[0-9a-f]{40}", commit):
+                    raise ValueError(f"{name}@{version}: release must use a full immutable commit SHA")
+                safe_registry_path(entry.get("path"))
+        return doc["packages"]
+    except (ValueError, TypeError, PjpmError) as e:
+        raise PjpmError(f"invalid registry releases.json: {e}") from e
+
+
+def read_registry_manifest(name, ref, path):
+    safe_name(name)
+    safe_registry_path(path)
+    if ref != "main" and not re.fullmatch(r"[0-9a-f]{40}", ref):
+        raise PjpmError("package source must be the legacy main branch or an immutable commit SHA")
+    repo = registry_repo()
+    base = f"https://raw.githubusercontent.com/{repo}/{ref}/{urllib.parse.quote(path, safe='/')}"
     for filename in (MANIFEST, LEGACY):
-        url=f"https://raw.githubusercontent.com/{repo}/main/{urllib.parse.quote(name)}/{filename}"
-        try: d=tomllib.loads(http(url))
-        except PjpmError: continue
-        if filename==MANIFEST:
-            p=d.get("package",{})
-            return {"name":p.get("name",name),"version":p.get("version","0.0.0"),"language":p.get("language","unknown"),"manifest":filename,"dependencies":d.get("dependencies",{})}
-        return {"name":name,"version":str(d.get("version","0.0.0")),"language":d.get("language","payjar"),"manifest":filename}
-    raise PjpmError(f"package {name!r} has no readable manifest in registry")
+        raw = http(f"{base}/{filename}", missing_ok=True)
+        if raw is None:
+            continue
+        try:
+            data = tomllib.loads(raw)
+        except (ValueError, TypeError) as e:
+            raise PjpmError(f"{name}: invalid {filename} at {ref}: {e}") from e
+        if filename == MANIFEST:
+            pkg = data.get("package", {})
+            if pkg.get("schema") != 2 or pkg.get("name") != name:
+                raise PjpmError(f"{name}: v2 manifest schema or name mismatch at {ref}")
+            version = pkg.get("version")
+            if not isinstance(version, str) or not re.fullmatch(r"\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?", version):
+                raise PjpmError(f"{name}: v2 release version must be SemVer")
+            deps = data.get("dependencies", {})
+            language = pkg.get("language", "unknown")
+        else:
+            version = str(data.get("version", "0.0.0"))
+            deps = {}
+            language = data.get("language", "payjar")
+        if not isinstance(deps, dict) or any(not isinstance(x, str) for x in deps.values()):
+            raise PjpmError(f"{name}: dependencies must map package names to constraint strings")
+        return {"name": name, "version": version, "language": language,
+                "manifest": filename, "dependencies": deps,
+                "commit": None if ref == "main" else ref, "path": path}
+    if http(f"{base}/init.pj", missing_ok=True) is not None:
+        return {"name": name, "version": "0.0.0", "language": "payjar",
+                "manifest": "init.pj", "dependencies": {},
+                "commit": None if ref == "main" else ref, "path": path}
+    raise PjpmError(f"package {name!r} has no manifest or init.pj at {ref}:{path}")
+
+
+def version_sort_key(version):
+    # Legacy package.toml may use major.minor rather than major.minor.patch.
+    match = re.fullmatch(r"(\d+)\.(\d+)(?:\.(\d+))?(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?", version)
+    if not match:
+        return (-1, -1, -1, 0, ())
+    pre = match.group(4)
+    identifiers = tuple((0, int(p)) if p.isdigit() else (1, p) for p in pre.split(".")) if pre else ()
+    return (int(match[1]), int(match[2]), int(match[3] or 0), 0 if pre else 1, identifiers)
+
+
+def registry_candidates(name):
+    safe_name(name)
+    entries = registry_index().get(name)
+    if entries is None:
+        return [read_registry_manifest(name, "main", name)]
+    releases = []
+    for version, entry in entries.items():
+        meta = read_registry_manifest(name, entry["commit"], entry["path"])
+        if meta["version"] != version:
+            raise PjpmError(f"{name}@{version}: index version differs from pinned manifest version {meta['version']}")
+        releases.append(meta)
+    return sorted(releases, key=lambda meta: version_sort_key(meta["version"]), reverse=True)
+
+
+def registry_manifest(name, constraint="*"):
+    candidates = registry_candidates(name)
+    for meta in candidates:
+        if version_ok(meta["version"], constraint):
+            return meta
+    raise PjpmError(f"{name}: no version satisfies {constraint!r}; available: {', '.join(x['version'] for x in candidates)}")
 
 def parse_spec(spec):
     if "@" in spec:
@@ -131,39 +231,59 @@ def add_dependency(name, constraint):
 def project_root():
     return Path.cwd()
 
-def install_package(name, constraint="*"):
-    meta=registry_manifest(name)
-    if not version_ok(meta["version"],constraint):
-        raise PjpmError(f"{name}: registry has {meta['version']}, which does not satisfy {constraint}; versioned registry releases are not available yet")
-    repo=registry_repo()
-    archive=http(f"https://codeload.github.com/{repo}/zip/refs/heads/main",binary=True)
-    digest=hashlib.sha256(archive).hexdigest()
-    dest=Path(".pjpm/packages")/name/meta["version"]
-    if dest.exists(): print(f"{name} {meta['version']} already installed"); return {"name":name,"version":meta["version"],"sha256":digest}
-    dest.parent.mkdir(parents=True,exist_ok=True)
+def install_package(meta, expected_sha256=None):
+    name = safe_name(meta["name"])
+    version = meta["version"]
+    path = safe_registry_path(meta.get("path", name))
+    commit = meta.get("commit")
+    if commit is not None and not re.fullmatch(r"[0-9a-f]{40}", commit):
+        raise PjpmError(f"{name}: expected an immutable commit SHA")
+    repo = registry_repo()
+    ref = commit if commit else "refs/heads/main"
+    archive = http(f"https://codeload.github.com/{repo}/zip/{ref}", binary=True)
+    digest = hashlib.sha256(archive).hexdigest()
+    if expected_sha256 and digest != expected_sha256:
+        raise PjpmError(f"integrity mismatch for {name}@{version}: source archive digest differs from lockfile")
+    record = {"name": name, "version": version, "registry": REGISTRY,
+              "commit": commit, "path": path, "sha256": digest}
+    dest = Path(".pjpm/packages") / name / version
+    if dest.exists():
+        print(f"{name} {version} already installed")
+        return record
+    dest.parent.mkdir(parents=True, exist_ok=True)
     try:
         with zipfile.ZipFile(__import__("io").BytesIO(archive)) as z:
-            prefix=None
+            prefix = None
+            source_parts = PurePosixPath(path).parts
             for item in z.infolist():
-                p=PurePosixPath(item.filename)
-                if p.is_absolute() or ".." in p.parts: raise PjpmError("registry archive contains an unsafe path")
-                if len(p.parts)>=2 and p.parts[1]==name:
-                    prefix=p.parts[0]+"/"+name+"/"; break
-            if prefix is None: raise PjpmError(f"package folder {name!r} not found in registry archive")
+                parts = PurePosixPath(item.filename).parts
+                if item.filename.startswith("/") or ".." in parts:
+                    raise PjpmError("registry archive contains an unsafe path")
+                if len(parts) > len(source_parts) and parts[1:1+len(source_parts)] == source_parts:
+                    prefix = "/".join(parts[:1+len(source_parts)]) + "/"
+                    break
+            if prefix is None:
+                raise PjpmError(f"package directory {path!r} not found at source {ref}")
             for item in z.infolist():
-                if not item.filename.startswith(prefix): continue
-                rel=PurePosixPath(item.filename[len(prefix):])
-                if not rel.parts: continue
-                target=(dest/Path(*rel.parts)).resolve()
-                if dest.resolve() not in target.parents and target!=dest.resolve(): raise PjpmError("archive path escapes install directory")
-                if item.is_dir(): target.mkdir(parents=True,exist_ok=True)
+                if not item.filename.startswith(prefix):
+                    continue
+                rel = PurePosixPath(item.filename[len(prefix):])
+                if not rel.parts:
+                    continue
+                target = (dest / Path(*rel.parts)).resolve()
+                if dest.resolve() not in target.parents and target != dest.resolve():
+                    raise PjpmError("archive path escapes install directory")
+                if item.is_dir():
+                    target.mkdir(parents=True, exist_ok=True)
                 else:
-                    target.parent.mkdir(parents=True,exist_ok=True)
-                    with z.open(item) as src, target.open("wb") as out: shutil.copyfileobj(src,out)
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    with z.open(item) as source, target.open("wb") as output:
+                        shutil.copyfileobj(source, output)
     except Exception:
-        shutil.rmtree(dest,ignore_errors=True); raise
-    print(f"installed {name} {meta['version']} -> {dest}")
-    return {"name":name,"version":meta["version"],"registry":REGISTRY,"sha256":digest}
+        shutil.rmtree(dest, ignore_errors=True)
+        raise
+    print(f"installed {name} {version} -> {dest}")
+    return record
 
 def command_for(adapter, entry=None, args=None):
     args=list(args or [])
@@ -213,36 +333,85 @@ def cmd_create(args):
     finally: os.chdir(old)
     print(f"created project ./{name}")
 
-def resolve_graph(root_dependencies):
-    """Resolve registry dependencies and reject cycles or incompatible constraints."""
-    selected = {}
-    visiting = []
-    ordered = []
-    def visit(name, constraint):
-        name = safe_name(name)
-        if name in visiting:
-            raise PjpmError("dependency cycle detected: " + " -> ".join(visiting + [name]))
-        if name in selected:
-            if not version_ok(selected[name]["version"], constraint):
-                raise PjpmError(f"dependency conflict for {name}: selected {selected[name]['version']} does not satisfy {constraint}")
-            return
-        visiting.append(name)
-        meta = registry_manifest(name)
-        if not version_ok(meta["version"], constraint):
-            raise PjpmError(f"{name}: registry has {meta['version']}, which does not satisfy {constraint}; only the current registry version is available")
-        selected[name] = meta
-        for child, child_constraint in sorted(meta.get("dependencies", {}).items()):
-            visit(child, str(child_constraint))
-        visiting.pop()
-        ordered.append((name, constraint))
-    for name, constraint in sorted(root_dependencies.items()):
-        visit(name, str(constraint))
-    return ordered
+def resolve_graph(root_dependencies, locked=None):
+    """Choose compatible releases with backtracking, then return dependencies first."""
+    if not isinstance(root_dependencies, dict):
+        raise PjpmError("dependencies must be a table")
+    locked = locked or {}
+    requirements = {safe_name(name): [str(constraint)] for name, constraint in root_dependencies.items()}
+    cached = {}
+    errors = []
+
+    def candidates(name):
+        if name not in cached:
+            choices = registry_candidates(name)
+            old = locked.get(name)
+            if old:
+                if old.get("registry") not in (None, REGISTRY):
+                    raise PjpmError(f"{name}: lockfile registry differs from PJPM_REGISTRY")
+                if old.get("commit"):
+                    pinned = read_registry_manifest(name, old["commit"], old.get("path", name))
+                    if pinned["version"] != old.get("version"):
+                        raise PjpmError(f"{name}: locked version does not match pinned manifest")
+                    choices = [pinned] + [x for x in choices if (x["version"], x.get("commit")) != (pinned["version"], pinned.get("commit"))]
+                else:
+                    choices.sort(key=lambda item: item["version"] != old.get("version"))
+            cached[name] = choices
+        return cached[name]
+
+    def topological(selected):
+        visiting, visited, ordered = [], set(), []
+
+        def visit(name):
+            if name in visiting:
+                raise PjpmError("dependency cycle detected: " + " -> ".join(visiting + [name]))
+            if name in visited:
+                return
+            visiting.append(name)
+            for child in sorted(selected[name].get("dependencies", {})):
+                visit(child)
+            visiting.pop()
+            visited.add(name)
+            ordered.append(selected[name])
+
+        for name in sorted(selected):
+            visit(name)
+        return ordered
+
+    def solve(selected, needed):
+        for name, meta in selected.items():
+            if not all(version_ok(meta["version"], constraint) for constraint in needed.get(name, [])):
+                errors.append(f"dependency conflict for {name}: selected {meta['version']} violates a constraint")
+                return None
+        remaining = sorted(name for name in needed if name not in selected)
+        if not remaining:
+            try:
+                return topological(selected)
+            except PjpmError as e:
+                errors.append(str(e))
+                return None
+        name = remaining[0]
+        for meta in candidates(name):
+            if not all(version_ok(meta["version"], req) for req in needed[name]):
+                continue
+            child_needs = {n: list(reqs) for n, reqs in needed.items()}
+            for child, requirement in sorted(meta.get("dependencies", {}).items()):
+                child_needs.setdefault(safe_name(child), []).append(str(requirement))
+            result = solve({**selected, name: meta}, child_needs)
+            if result is not None:
+                return result
+        errors.append(f"{name}: no compatible release satisfies {', '.join(needed[name])}")
+        return None
+
+    solution = solve({}, requirements)
+    if solution is None:
+        raise PjpmError(errors[-1] if errors else "unable to resolve dependencies")
+    return solution
 
 def cmd_add(args):
-    name,constraint=parse_spec(args.package)
-    records=[install_package(dep, req) for dep,req in resolve_graph({name:constraint})]
-    add_dependency(name,constraint)
+    name, constraint = parse_spec(args.package)
+    records = [install_package(meta) for meta in resolve_graph({name: constraint})]
+    add_dependency(name, constraint)
     lock_write(records)
 
 def lock_write(new_records, replace_all=False):
@@ -255,31 +424,38 @@ def lock_write(new_records, replace_all=False):
     p.write_text(json.dumps({"lock_version":1,"packages":[current[k] for k in sorted(current)]},indent=2)+"\n")
 
 def cmd_install(args):
-    m=load_manifest()
-    lock=Path(LOCK)
-    locked={}
+    manifest = load_manifest()
+    lock = Path(LOCK)
+    locked = {}
     if lock.exists():
-        try: locked={x["name"]:x for x in json.loads(lock.read_text()).get("packages",[])}
-        except Exception as e: raise PjpmError(f"invalid {LOCK}: {e}")
-    graph=resolve_graph(m["dependencies"])
-    records=[]
-    for name,constraint in graph:
-        rec=install_package(name,constraint)
-        if name in locked and locked[name].get("version")==rec["version"] and locked[name].get("sha256")!=rec["sha256"]:
-            raise PjpmError(f"integrity mismatch for {name}: registry archive changed since lockfile creation")
-        records.append(rec)
+        try:
+            locked = {item["name"]: item for item in json.loads(lock.read_text()).get("packages", [])}
+        except Exception as e:
+            raise PjpmError(f"invalid {LOCK}: {e}") from e
+    graph = resolve_graph(manifest["dependencies"], locked=locked)
+    records = []
+    for meta in graph:
+        name = meta["name"]
+        old = locked.get(name, {})
+        expected = None
+        if old.get("version") == meta["version"]:
+            if old.get("commit") != meta.get("commit") or old.get("path", name) != meta.get("path", name):
+                raise PjpmError(f"{name}: release source changed since locking; run pjpm update to choose a new release")
+            expected = old.get("sha256")
+        records.append(install_package(meta, expected_sha256=expected))
     lock_write(records, replace_all=True)
     print(f"installed {len(records)} package(s), including transitive dependencies")
 
 def cmd_update(args):
-    m=load_manifest()
-    roots=m["dependencies"]
+    manifest = load_manifest()
+    roots = manifest["dependencies"]
     if args.package:
-        name=safe_name(args.package)
-        if name not in roots: raise PjpmError(f"{name} is not a direct dependency")
-        roots={name:roots[name]}
-    graph=resolve_graph(roots)
-    records=[install_package(name,constraint) for name,constraint in graph]
+        name = safe_name(args.package)
+        if name not in roots:
+            raise PjpmError(f"{name} is not a direct dependency")
+        roots = {name: roots[name]}
+    graph = resolve_graph(roots)
+    records = [install_package(meta) for meta in graph]
     lock_write(records, replace_all=not bool(args.package))
     print(f"updated {len(records)} package(s)")
 
@@ -312,7 +488,9 @@ def cmd_search(args):
     if not matches: print("No packages found.")
 
 def cmd_info(args):
-    n=safe_name(args.package); print(json.dumps(registry_manifest(n),indent=2))
+    name = safe_name(args.package)
+    choices = registry_candidates(name)
+    print(json.dumps({**choices[0], "available_versions": [x["version"] for x in choices]}, indent=2))
 
 def cmd_build(args):
     m=load_manifest(); b=m["build"]; adapter=b.get("adapter",m["language"])
