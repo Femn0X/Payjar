@@ -145,6 +145,20 @@ mod tests {
     }
 
     #[test]
+    fn interpreter_loads_a_pjpm_installed_payjar_module() {
+        let dir = tempdir().unwrap();
+        let installed = dir.path().join(".pjpm/packages/Geometry/1.0.1/init.pj");
+        fs::create_dir_all(installed.parent().unwrap()).unwrap();
+        fs::write(&installed, "package Geometry;\nfunc hypot(a:Float,b:Float)->Float { return math.sqrt(a*a+b*b); }\n").unwrap();
+        fs::write(dir.path().join("pjpm.lock"),
+                  r#"{"packages":[{"name":"Geometry","version":"1.0.1"}]}"#).unwrap();
+        let mut env = super::super::Env::new();
+        env.package_root = dir.path().to_path_buf();
+        super::super::load_folder_package(&mut env, "Geometry", None, false);
+        assert!(env.funcs.contains_key("hypot"));
+    }
+
+    #[test]
     fn prevents_unsafe_version_paths() {
         assert!(!safe_lock_version("../outside"));
         assert!(!safe_lock_version("1/../../bad"));
