@@ -30,7 +30,7 @@ jobs:
       - name: Compile tests
         run: cargo test --no-run
       - name: Run tests
-        run: cargo test
+        run: cargo test -- --nocapture
 
   # ---------------------------------------------------------------------
   # Windows x86_64: build and package the standard 64-bit executable.
