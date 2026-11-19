@@ -7,9 +7,6 @@ use std::process::Command;
 
 pub fn project_root_for_script(script_path: &Path) -> PathBuf {
     let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    if cwd.join("config.toml").is_file() {
-        return cwd;
-    }
     if let Some(parent) = script_path.parent() {
         let candidate = if parent.is_absolute() { parent.to_path_buf() } else { cwd.join(parent) };
         if candidate.join("config.toml").is_file() {
@@ -164,6 +161,15 @@ mod tests {
         assert!(!safe_lock_version("1/../../bad"));
         assert!(!safe_lock_version(".."));
         assert!(safe_lock_version("1.2.3-rc.1+build"));
+    }
+
+    #[test]
+    fn prefers_the_script_project_config_over_cwd() {
+        let dir = tempdir().unwrap();
+        let project = dir.path().join("other-project");
+        fs::create_dir_all(&project).unwrap();
+        fs::write(project.join("config.toml"), "[dependencies]\nGeometry = \"1.0.1\"").unwrap();
+        assert_eq!(project_root_for_script(&project.join("main.pj")), project);
     }
 
     #[test]
