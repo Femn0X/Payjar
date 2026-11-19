@@ -146,7 +146,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let installed = dir.path().join(".pjpm/packages/Geometry/1.0.1/init.pj");
         fs::create_dir_all(installed.parent().unwrap()).unwrap();
-        fs::write(&installed, "package Geometry;\nfunc hypot(a:Float,b:Float)->Float { return math.sqrt(a*a+b*b); }\n").unwrap();
+        fs::write(&installed, "package Geometry;\nfunc hypot(a:Float,b:Float)->Float { let left:Float = a*a; let right:Float = b*b; return math.sqrt(left+right); }\n").unwrap();
         fs::write(dir.path().join("pjpm.lock"),
                   r#"{"packages":[{"name":"Geometry","version":"1.0.1"}]}"#).unwrap();
         let mut env = super::super::Env::new();
