@@ -173,6 +173,17 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(windows))]
+    fn runs_project_pjpm_sync_when_dependencies_declared() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("config.toml"), "[dependencies]\nGeometry = \"1.0.1\"").unwrap();
+        fs::write(dir.path().join("pjpm.py"), 
+                  "import pathlib, sys\nassert sys.argv[1] == 'sync'\npathlib.Path('did-sync').write_text('yes')\n").unwrap();
+        sync_config_dependencies(dir.path()).unwrap();
+        assert_eq!(fs::read_to_string(dir.path().join("did-sync")).unwrap(), "yes");
+    }
+
+    #[test]
     fn ignores_runtime_config_without_dependencies() {
         let dir = tempdir().unwrap();
         fs::write(dir.path().join("config.toml"), "backend = \"interpreter\"\n").unwrap();
