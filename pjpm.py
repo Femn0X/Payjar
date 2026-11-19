@@ -280,7 +280,7 @@ def cmd_update(args):
         roots={name:roots[name]}
     graph=resolve_graph(roots)
     records=[install_package(name,constraint) for name,constraint in graph]
-    lock_write(records)
+    lock_write(records, replace_all=not bool(args.package))
     print(f"updated {len(records)} package(s)")
 
 def cmd_remove(args):
