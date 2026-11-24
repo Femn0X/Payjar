@@ -9,6 +9,7 @@ pub mod gui_channel;
 pub mod jit;
 pub mod asm;
 pub mod asm_vm;
+pub mod asm_native;
 mod package_manager;
 
 // Re-export everything callers need
