@@ -14,6 +14,70 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  assembly-targets:
+    name: Assembly ABI (${{ matrix.arch }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            cc: x86_64-linux-gnu-gcc
+            packages: gcc
+            flags: ""
+            runner: ""
+          - arch: x86
+            cc: i686-linux-gnu-gcc
+            packages: gcc-i686-linux-gnu libc6-dev-i386-cross qemu-user
+            flags: ""
+            runner: qemu-i386
+          - arch: aarch64
+            cc: aarch64-linux-gnu-gcc
+            packages: gcc-aarch64-linux-gnu libc6-dev-arm64-cross qemu-user
+            flags: ""
+            runner: qemu-aarch64
+          - arch: arm
+            cc: arm-linux-gnueabihf-gcc
+            packages: gcc-arm-linux-gnueabihf libc6-dev-armhf-cross qemu-user
+            flags: "-march=armv7-a -mfpu=vfpv3-d16 -marm"
+            runner: qemu-arm
+          - arch: riscv64
+            cc: riscv64-linux-gnu-gcc
+            packages: gcc-riscv64-linux-gnu libc6-dev-riscv64-cross qemu-user
+            flags: ""
+            runner: qemu-riscv64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install target toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ${{ matrix.packages }}
+      - name: Test emitter and execute generated assembly
+        env:
+          ARCH: ${{ matrix.arch }}
+          CC: ${{ matrix.cc }}
+          FLAGS: ${{ matrix.flags }}
+          RUNNER: ${{ matrix.runner }}
+        run: |
+          set -euo pipefail
+          rustc --edition=2024 --test tests/assembly_smoke.rs -o /tmp/asm-tests
+          /tmp/asm-tests
+          rustc --edition=2024 tests/assembly_smoke.rs -o /tmp/asm-emit
+          cat > /tmp/asm-check.c <<'EOF'
+          #include <stdint.h>
+          #include <stdlib.h>
+          extern int64_t payjar_entry(void);
+          int main(int argc, char **argv) {
+              return argc != 2 || payjar_entry() != strtoll(argv[1], 0, 10);
+          }
+          EOF
+          for value in 0 1 -1 42 2147483648 -4294967295 9223372036854775807 -9223372036854775808; do
+            /tmp/asm-emit "$ARCH" "$value" > /tmp/asm-output.s
+            "$CC" $FLAGS -static /tmp/asm-check.c /tmp/asm-output.s -o /tmp/asm-check
+            $RUNNER /tmp/asm-check "$value"
+          done
+
   linux-tests:
     name: Linux compile and tests
     runs-on: ubuntu-latest
@@ -109,9 +173,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust (stable) with both Apple targets
-        uses: dtolnay/rust-toolchain@stable
+      # Rust 1.100 regresses objc2 0.4.1 (rust-lang/rust#166229).
+      - name: Install Rust 1.99.0 with both Apple targets
+        uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: 1.99.0
           targets: aarch64-apple-darwin,x86_64-apple-darwin
 
       - name: Cache cargo registry/target
@@ -154,7 +220,7 @@ jobs:
   # ---------------------------------------------------------------------
   release:
     name: Publish GitHub Release
-    needs: [windows, windows-arm64, macos]
+    needs: [windows, windows-arm64, macos, assembly-targets, linux-tests]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
