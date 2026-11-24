@@ -1,9 +1,9 @@
 //! First native-assembly backend for PayJar.
 //!
 //! This module deliberately starts with a small, auditable subset: pure
-//! integer-literal expressions using +, -, and *. Both targets consume the
+//! integer-literal expressions using +, -, and *. All targets consume the
 //! same AST and emit a zero-argument function returning an i64 in the
-//! platform's standard integer return register.
+//! platform's standard integer return register(s).
 //!
 //! Output uses GNU assembler syntax for ELF targets (Linux). It is assembly
 //! text, not executable machine code; executable JIT memory management and
@@ -15,6 +15,9 @@ use crate::payjar::ast::{AstNode, NodeType};
 pub enum AssemblyTarget {
     X86_64,
     Aarch64,
+    Riscv64,
+    Arm,
+    X86,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -55,7 +58,8 @@ fn validate(node: &AstNode) -> Result<i64, AssemblyError> {
 /// Emit a complete native function named `payjar_entry`.
 ///
 /// x86-64 uses the System V ABI (result in RAX); AArch64 uses AAPCS64
-/// (result in X0). Output currently targets GNU assembler on ELF platforms.
+/// (result in X0). RV64 returns in a0, ARMv7 little-endian in r0/r1,
+/// and i386 in EDX:EAX. Output targets GNU assembler on ELF platforms.
 pub fn emit_integer_expression(
     node: &AstNode,
     target: AssemblyTarget,
@@ -76,6 +80,28 @@ pub fn emit_integer_expression(
             out.push_str(".text\n.globl payjar_entry\n.type payjar_entry, %function\npayjar_entry:\n");
             emit_aarch64_constant(value, &mut out);
             out.push_str("    ret\n.size payjar_entry, .-payjar_entry\n.section .note.GNU-stack,\"\",%progbits\n");
+        }
+        AssemblyTarget::Riscv64 => {
+            out.push_str(".text\n.globl payjar_entry\n.type payjar_entry, @function\npayjar_entry:\n");
+            out.push_str(&format!("    li a0, {}\n    ret\n", value));
+            out.push_str(".size payjar_entry, .-payjar_entry\n.section .note.GNU-stack,\"\",@progbits\n");
+        }
+        AssemblyTarget::Arm => {
+            out.push_str(".syntax unified\n.arch armv7-a\n.arm\n.text\n.p2align 2\n.globl payjar_entry\n.type payjar_entry, %function\npayjar_entry:\n");
+            let bits = value as u64;
+            for (reg, word) in [("r0", bits as u32), ("r1", (bits >> 32) as u32)] {
+                out.push_str(&format!("    movw {}, #{}\n", reg, word & 0xffff));
+                if word >> 16 != 0 {
+                    out.push_str(&format!("    movt {}, #{}\n", reg, word >> 16));
+                }
+            }
+            out.push_str("    bx lr\n.size payjar_entry, .-payjar_entry\n.section .note.GNU-stack,\"\",%progbits\n");
+        }
+        AssemblyTarget::X86 => {
+            out.push_str(".text\n.intel_syntax noprefix\n.code32\n.globl payjar_entry\n.type payjar_entry, @function\npayjar_entry:\n");
+            let bits = value as u64;
+            out.push_str(&format!("    mov eax, {}\n    mov edx, {}\n    ret\n", bits as u32, (bits >> 32) as u32));
+            out.push_str(".size payjar_entry, .-payjar_entry\n.section .note.GNU-stack,\"\",@progbits\n");
         }
     }
     Ok(out)
@@ -145,6 +171,17 @@ mod tests {
         let asm = emit_integer_expression(&int(i64::MIN), AssemblyTarget::Aarch64).unwrap();
         assert!(asm.contains("movz x0, #32768, lsl #48"));
         assert!(!asm.contains("movk"));
+    }
+
+    #[test]
+    fn new_targets_preserve_full_width_returns() {
+        let value = int(-4294967295);
+        let x86 = emit_integer_expression(&value, AssemblyTarget::X86).unwrap();
+        assert!(x86.contains("mov eax, 1\n    mov edx, 4294967295"));
+        let arm = emit_integer_expression(&value, AssemblyTarget::Arm).unwrap();
+        assert!(arm.contains("movw r0, #1\n    movw r1, #65535\n    movt r1, #65535"));
+        let rv = emit_integer_expression(&value, AssemblyTarget::Riscv64).unwrap();
+        assert!(rv.contains("li a0, -4294967295\n    ret"));
     }
 
     #[test]
