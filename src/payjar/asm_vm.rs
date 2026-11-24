@@ -228,7 +228,7 @@ impl Compiler {
                     self.expression(node.expr.as_deref().ok_or(CompileError::UnsupportedNode)?)?;
                     let exit_jump = self.code.len();
                     self.code.push(Instruction::JumpIfZero(usize::MAX));
-                    self.statements(&node.body)?;
+                    self.control_flow_body(&node.body)?;
                     self.code.push(Instruction::Jump(loop_start));
                     let end = self.code.len();
                     self.code[exit_jump] = Instruction::JumpIfZero(end);
@@ -303,6 +303,12 @@ mod tests {
         branch.expr = Some(Box::new(int(0)));
         branch.body = vec![declaration("x", int(42))];
         assert_eq!(compile(&[branch]), Err(CompileError::UnsupportedNode));
+    }
+
+    #[test]
+    fn rejects_loop_local_declarations() {
+        assert_eq!(compile(&[while_loop(int(0), vec![declaration("x", int(1))])]),
+            Err(CompileError::UnsupportedNode));
     }
 
     #[test]
