@@ -173,6 +173,15 @@ impl Compiler {
         Ok(())
     }
 
+    // Until lexical scope and definite initialization are modeled, reject
+    // declarations in conditional/repeated blocks instead of leaking slots.
+    fn control_flow_body(&mut self, nodes: &[AstNode]) -> Result<(), CompileError> {
+        if nodes.iter().any(|n| n.typ == NodeType::VarDecl) {
+            return Err(CompileError::UnsupportedNode);
+        }
+        self.statements(nodes)
+    }
+
     fn statements(&mut self, nodes: &[AstNode]) -> Result<(), CompileError> {
         for node in nodes {
             match &node.typ {
@@ -182,8 +191,8 @@ impl Compiler {
                         return Err(CompileError::DuplicateVariable(name));
                     }
                     let index = self.locals.len();
-                    self.locals.insert(name, index);
                     self.expression(node.expr.as_deref().ok_or(CompileError::UnsupportedNode)?)?;
+                    self.locals.insert(name, index);
                     self.code.push(Instruction::StoreLocal(index));
                 }
                 NodeType::Assign => {
@@ -194,10 +203,13 @@ impl Compiler {
                     self.code.push(Instruction::StoreLocal(index));
                 }
                 NodeType::If => {
+                    if !node.else_if_conds.is_empty() || !node.else_if_bodies.is_empty() {
+                        return Err(CompileError::UnsupportedNode);
+                    }
                     self.expression(node.expr.as_deref().ok_or(CompileError::UnsupportedNode)?)?;
                     let branch = self.code.len();
                     self.code.push(Instruction::JumpIfZero(usize::MAX));
-                    self.statements(&node.body)?;
+                    self.control_flow_body(&node.body)?;
                     if node.else_body.is_empty() {
                         let end = self.code.len();
                         self.code[branch] = Instruction::JumpIfZero(end);
@@ -206,7 +218,7 @@ impl Compiler {
                         self.code.push(Instruction::Jump(usize::MAX));
                         let else_start = self.code.len();
                         self.code[branch] = Instruction::JumpIfZero(else_start);
-                        self.statements(&node.else_body)?;
+                        self.control_flow_body(&node.else_body)?;
                         let end = self.code.len();
                         self.code[skip_else] = Instruction::Jump(end);
                     }
@@ -281,6 +293,25 @@ mod tests {
         let mut n = AstNode::new(NodeType::Return);
         n.expr = Some(Box::new(value));
         n
+    }
+
+    #[test]
+    fn rejects_self_reference_and_conditional_declarations() {
+        assert_eq!(compile(&[declaration("x", var("x"))]),
+            Err(CompileError::UnknownVariable("x".to_owned())));
+        let mut branch = AstNode::new(NodeType::If);
+        branch.expr = Some(Box::new(int(0)));
+        branch.body = vec![declaration("x", int(42))];
+        assert_eq!(compile(&[branch]), Err(CompileError::UnsupportedNode));
+    }
+
+    #[test]
+    fn rejects_unimplemented_else_if_instead_of_ignoring_it() {
+        let mut branch = AstNode::new(NodeType::If);
+        branch.expr = Some(Box::new(int(0)));
+        branch.else_if_conds.push(int(1));
+        branch.else_if_bodies.push(vec![returning(int(42))]);
+        assert_eq!(compile(&[branch]), Err(CompileError::UnsupportedNode));
     }
 
     #[test]
