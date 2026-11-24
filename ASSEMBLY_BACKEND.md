@@ -30,7 +30,8 @@ stream and executes that stream in a portable VM:
 - checked arithmetic, explicit compile/runtime errors, and a configurable
   instruction-step limit.
 
-The first VM version uses one flat local frame. Lexical shadowing, block-scope
+The first VM version uses one flat local frame. Declarations inside conditional or loop bodies and else-if chains are rejected
+until their semantics are implemented. Lexical shadowing, block-scope
 lifetimes, floats, strings, collections, function calls, exceptions, and
 built-ins are not yet supported. In particular, integer overflow returns a VM
 error rather than silently changing PayJar's integer value into a float. The
@@ -58,9 +59,9 @@ Target-specific code generation is isolated behind `AssemblyTarget`:
 - `AssemblyTarget::X86_64`: GNU assembler Intel syntax, ELF symbol directives.
 - `AssemblyTarget::Aarch64`: GNU assembler AArch64 syntax, ELF symbol directives.
 
-The first implementation uses a simple stack-based expression lowering strategy
-rather than register allocation. This keeps the initial code generator small
-and makes evaluation order explicit.
+The constant-expression emitter folds the entire checked expression at compile time.
+It emits a leaf function without stack traffic, selecting compact x86-64 immediates
+and AArch64 MOVZ/MOVN/MOVK sequences. Both targets mark the ELF stack non-executable.
 
 ## Planned milestones
 
