@@ -78,6 +78,28 @@ jobs:
             $RUNNER /tmp/asm-check "$value"
           done
 
+      - name: Execute native bytecode lowering
+        if: matrix.arch == 'x86_64'
+        run: |
+          set -euo pipefail
+          cat > /tmp/native-check.c <<'EOF'
+          #include <stdint.h>
+          #include <stdlib.h>
+          extern int payjar_run(int64_t *, uint64_t);
+          int main(int argc, char **argv) {
+              if (argc != 3) return 1;
+              int64_t result = -123;
+              int status = payjar_run(&result, 100);
+              return status != atoi(argv[1]) || result != strtoll(argv[2], 0, 10);
+          }
+          EOF
+          for spec in 'loop 0 15' 'overflow 1 -123' 'fuel 2 -123'; do
+            read -r name status result <<< "$spec"
+            /tmp/asm-emit x86_64 native "$name" > /tmp/native.s
+            gcc /tmp/native-check.c /tmp/native.s -o /tmp/native-check
+            /tmp/native-check "$status" "$result"
+          done
+
   linux-tests:
     name: Linux compile and tests
     runs-on: ubuntu-latest
