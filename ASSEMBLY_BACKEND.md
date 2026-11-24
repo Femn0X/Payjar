@@ -9,8 +9,7 @@ source for ELF/Linux targets from a deliberately narrow AST subset:
 - binary `+`, `-`, and `*`;
 - checked i64 arithmetic only.
 
-The emitted function is named `payjar_entry` and returns its result in RAX
-(x86-64 System V) or X0 (AArch64/AAPCS64). Unsupported AST nodes and checked
+The emitted function is named `payjar_entry` and returns its signed i64 result according to the target ABI (see Architecture below). Unsupported AST nodes and checked
 integer overflow are reported to the caller so the existing interpreter can
 remain the semantic fallback.
 
@@ -48,20 +47,28 @@ let result = Vm::default().execute(&program)?;
 ```
 
 This VM is a shared execution specification; it does not yet emit native
-instructions from bytecode. The x86-64 and AArch64 assembly emitters remain
+instructions from bytecode. The native assembly emitters remain
 separate, earlier-stage source generators.
 
 ## Architecture
 
-Both targets share the PayJar AST and the same validation/lowering decisions.
+All five targets share the PayJar AST and the same validation/lowering decisions.
 Target-specific code generation is isolated behind `AssemblyTarget`:
 
 - `AssemblyTarget::X86_64`: GNU assembler Intel syntax, ELF symbol directives.
 - `AssemblyTarget::Aarch64`: GNU assembler AArch64 syntax, ELF symbol directives.
+- `AssemblyTarget::Riscv64`: RV64 GNU assembler, result in `a0`.
+- `AssemblyTarget::Arm`: ARMv7-A little-endian AAPCS32, result in `r0` (low) and `r1` (high).
+- `AssemblyTarget::X86`: i386 System V, result in `EAX` (low) and `EDX` (high).
+
+The 64-bit x86 and AArch64 targets return in `RAX` and `X0`, respectively.
+The Linux assembly CI matrix assembles, links and executes generated functions
+for each of the five targets, using QEMU user-mode emulation for cross targets.
+This validates emitted ELF code, not full Payjar application ports.
 
 The constant-expression emitter folds the entire checked expression at compile time.
 It emits a leaf function without stack traffic, selecting compact x86-64 immediates
-and AArch64 MOVZ/MOVN/MOVK sequences. Both targets mark the ELF stack non-executable.
+and AArch64 MOVZ/MOVN/MOVK sequences. All targets mark the ELF stack non-executable.
 
 ## Planned milestones
 
