@@ -1,8 +1,9 @@
 // Standalone backend harness: no GUI dependencies or cross Rust std needed.
-mod payjar {
-    pub mod ast { include!("../src/payjar/ast.rs"); }
-    pub mod asm { include!("../src/payjar/asm.rs"); }
-}
+extern crate self as payjar;
+#[path = "../src/payjar/ast.rs"]
+pub mod ast;
+#[path = "../src/payjar/asm.rs"]
+pub mod asm;
 use payjar::{asm::{AssemblyTarget, emit_integer_expression}, ast::{AstNode, NodeType}};
 fn main() {
     let target = match std::env::args().nth(1).as_deref() {
