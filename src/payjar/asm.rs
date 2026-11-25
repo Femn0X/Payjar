@@ -60,6 +60,10 @@ fn validate(node: &AstNode) -> Result<i64, AssemblyError> {
 /// x86-64 uses the System V ABI (result in RAX); AArch64 uses AAPCS64
 /// (result in X0). RV64 returns in a0, ARMv7 little-endian in r0/r1,
 /// and i386 in EDX:EAX. Output targets GNU assembler on ELF platforms.
+fn try_from(n:i64)->Result<i32,()>{
+ if n<=i32::MAX.into() && n>=i32::MIN.into(){Ok(n as i32)}
+ else{Err(())}
+}
 pub fn emit_integer_expression(
     node: &AstNode,
     target: AssemblyTarget,
@@ -69,7 +73,7 @@ pub fn emit_integer_expression(
     match target {
         AssemblyTarget::X86_64 => {
             out.push_str(".text\n.intel_syntax noprefix\n.globl payjar_entry\n.type payjar_entry, @function\npayjar_entry:\n");
-            if i32::try_from(value).is_ok() {
+            if try_from(value).is_ok() {
                 out.push_str(&format!("    mov rax, {}\n", value));
             } else {
                 out.push_str(&format!("    movabs rax, {}\n", value));
