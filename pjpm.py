@@ -201,7 +201,7 @@ def version_ok(version, constraint):
         return True
     value = version_sort_key(version)
     for part in (x.strip() for x in constraint.split(",")):
-        if not part or part == "*":
+        if not part or part in ("*", "latest"):
             continue
         op = next((x for x in (">=", "<=", "!=", ">", "<", "^", "~", "=") if part.startswith(x)), "")
         raw = part[len(op):].strip()
@@ -254,7 +254,7 @@ def project_dependencies():
             if not isinstance(constraint, str) or not constraint.strip():
                 raise PjpmError(f"config.toml: {name} must have a nonempty version constraint string")
             if name in dependencies and dependencies[name] != constraint:
-                raise PjpmError(f"{name}: config.toml and pjpackage.toml specify different constraints")
+                constraint = f"{dependencies[name]},{constraint}"
             dependencies[name] = constraint
     if not dependencies and not (Path(MANIFEST).exists() or Path(LEGACY).exists()
                                  or Path("init.pj").exists() or config.is_file()):
@@ -539,6 +539,7 @@ def cmd_add(args):
     records = [install_package(meta) for meta in resolve_graph(roots)]
     add_dependency(name, constraint)
     lock_write(records, replace_all=True, requirements=remote_dependencies(project_dependencies()))
+    build_dependencies(records, getattr(args, "approve_build", False))
 
 def lock_write(new_records, replace_all=False, requirements=None):
     p = Path(LOCK)
@@ -569,7 +570,28 @@ def cmd_install(args):
             expected = old.get("sha256")
         records.append(install_package(meta, expected_sha256=expected))
     lock_write(records, replace_all=True, requirements=roots)
+    build_dependencies(records, getattr(args, "approve_build", False))
     print(f"installed {len(records)} package(s), including transitive dependencies")
+
+
+def build_dependencies(records, approved=False):
+    """Build Cargo dependencies in lock order; Cargo handles incremental caching."""
+    if not approved:
+        return
+    for record in records:
+        root = Path(".pjpm/packages") / safe_name(record["name"]) / safe_version(record["version"])
+        manifest = load_manifest(root)
+        if manifest["language"] != "rust":
+            continue
+        build = manifest["build"]
+        if build.get("adapter", "cargo") not in ("cargo", "rust"):
+            raise PjpmError(f"{record['name']}: unsupported Rust build adapter")
+        args = build.get("args", ["build", "--release"])
+        if not isinstance(args, list) or not args or args[0] != "build" or not all(isinstance(x, str) for x in args):
+            raise PjpmError(f"{record['name']}: expected Cargo build arguments")
+        code = run_vector(["cargo", *args], cwd=root)
+        if code:
+            raise PjpmError(f"{record['name']}: Cargo build failed with exit code {code}")
 
 
 def cmd_sync(args):
@@ -579,9 +601,10 @@ def cmd_sync(args):
         if Path(LOCK).is_file() and read_lock().get("packages"):
             lock_write([], replace_all=True, requirements={})
         return
-    if packages_ready(roots):
-        return
-    cmd_install(args)
+    if not packages_ready(roots):
+        cmd_install(args)
+    else:
+        build_dependencies(read_lock().get("packages", []), getattr(args, "approve_build", False))
 
 
 def cmd_update(args):
@@ -596,6 +619,7 @@ def cmd_update(args):
     graph = resolve_graph(roots, locked=locked)
     records = [install_package(meta) for meta in graph]
     lock_write(records, replace_all=True, requirements=roots)
+    build_dependencies(records, getattr(args, "approve_build", False))
     print(f"updated {len(records)} package(s)")
 
 
@@ -651,6 +675,8 @@ def cmd_build(args):
     m=load_manifest(); b=m["build"]; adapter=b.get("adapter",m["language"])
     if adapter=="custom":
         vector=b.get("command")
+    elif adapter in ("cargo", "rust"):
+        vector=["cargo", *b.get("args", ["build", "--release"])]
     else:
         vector=command_for(adapter,args=b.get("args",[]))
     if not args.approve_build:
@@ -686,9 +712,10 @@ def main():
     sub=ap.add_subparsers(dest="cmd",required=True)
     p=sub.add_parser("init"); p.add_argument("name",nargs="?"); p.set_defaults(fn=cmd_init)
     p=sub.add_parser("create"); p.add_argument("name"); p.set_defaults(fn=cmd_create)
-    p=sub.add_parser("add"); p.add_argument("package"); p.set_defaults(fn=cmd_add)
-    p=sub.add_parser("install"); p.set_defaults(fn=cmd_install)
-    p=sub.add_parser("sync"); p.set_defaults(fn=cmd_sync)
+    p=sub.add_parser("add"); p.add_argument("package"); p.add_argument("--approve-build",action="store_true",help="Allow Cargo dependencies to execute build code"); p.set_defaults(fn=cmd_add)
+    p=sub.add_parser("install"); p.add_argument("--approve-build",action="store_true",help="Allow Cargo dependencies to execute build code"); p.set_defaults(fn=cmd_install)
+    p=sub.add_parser("sync"); p.add_argument("--approve-build",action="store_true",help="Allow Cargo dependencies to execute build code"); p.set_defaults(fn=cmd_sync)
+    p=sub.add_parser("update"); p.add_argument("package",nargs="?"); p.add_argument("--approve-build",action="store_true"); p.set_defaults(fn=cmd_update)
     p=sub.add_parser("remove"); p.add_argument("package"); p.set_defaults(fn=cmd_remove)
     p=sub.add_parser("uninstall"); p.add_argument("package"); p.set_defaults(fn=cmd_remove)
     p=sub.add_parser("list"); p.set_defaults(fn=cmd_list)
