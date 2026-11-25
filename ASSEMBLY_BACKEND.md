@@ -46,8 +46,9 @@ let program = compile(&ast.body)?;
 let result = Vm::default().execute(&program)?;
 ```
 
-This VM is a shared execution specification; it does not yet emit native
-instructions from bytecode. The native assembly emitters remain
+This VM is a shared execution specification. The experimental x86-64 lowering
+in `asm_native.rs` now emits native instructions directly from its bytecode.
+Other architectures still support only constant-expression emission. The native assembly emitters remain
 separate, earlier-stage source generators.
 
 ## Architecture
@@ -69,6 +70,20 @@ This validates emitted ELF code, not full Payjar application ports.
 The constant-expression emitter folds the entire checked expression at compile time.
 It emits a leaf function without stack traffic, selecting compact x86-64 immediates
 and AArch64 MOVZ/MOVN/MOVK sequences. All targets mark the ELF stack non-executable.
+
+## Native bytecode lowering (x86-64)
+
+`asm_native::emit_program(&program, AssemblyTarget::X86_64)` validates
+local indices, jump destinations, stack underflow and consistent stack depths
+before emitting GNU ELF/System V assembly. It supports every current VM
+instruction, using a bounded stack frame and explicit overflow/fuel checks.
+
+The generated function has C signature
+`int payjar_run(int64_t *result, uint64_t fuel)`.
+Status 0 means success, 1 means signed overflow, and 2 means fuel exhaustion.
+The output pointer must be writable and is modified only on success.
+Fuel is counted per VM instruction, including branches and return.
+This API is not wired into the interpreter or a JIT.
 
 ## Planned milestones
 
