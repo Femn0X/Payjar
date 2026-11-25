@@ -11,6 +11,7 @@ pub mod asm;
 pub mod asm_vm;
 pub mod asm_native;
 mod package_manager;
+mod native_bridge;
 
 // Re-export everything callers need
 pub use ast::{AstNode, NodeType};
@@ -482,6 +483,7 @@ impl Scope {
 
 pub struct Env {
     pub package_root: PathBuf,
+    native_modules: HashMap<String, Rc<native_bridge::NativeModule>>,
     pub funcs: HashMap<String, AstNode>,
     pub classes: HashMap<String, AstNode>,
     /// Enum type name -> ordered list of variant names.
@@ -494,6 +496,7 @@ impl Env {
         install_quiet_panic_hook();
         let mut env = Env {
             package_root: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+            native_modules: HashMap::default(),
             funcs: HashMap::default(),
             classes: HashMap::default(),
             enums: HashMap::default(),
@@ -1322,6 +1325,10 @@ pub fn eval(env: &mut Env, node: &AstNode, self_obj: Option<Rc<RefCell<PJObject>
                 Value::Object(ref obj_rc) => {
                     if node.is_call() {
                         let class_name = obj_rc.borrow().class_name.clone();
+                        if let Some(module) = env.native_modules.get(&class_name).cloned() {
+                            let args: Vec<Value> = node.args.iter().map(|a| eval(env, a, self_obj.clone())).collect();
+                            return module.call(member_name, &args).unwrap_or_else(|e| runtime_error(e));
+                        }
                         if let Some(v) = builtins::eval_builtin_module_method(
                             class_name.as_str(), member_name, &node.args, env, self_obj.clone())
                         {
@@ -1532,6 +1539,13 @@ fn load_folder_package(env: &mut Env, pkg_name: &str, alias: Option<&str>, debug
     // Package names must be plain identifiers: no path traversal.
     if pkg_name.is_empty() || !pkg_name.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-') {
         eprintln!("Import Error: invalid package name '{}'", pkg_name); process::exit(1);
+    }
+    if let Ok(Some(path)) = package_manager::native_library_path(&env.package_root, pkg_name) {
+        let module = native_bridge::NativeModule::load(&path).unwrap_or_else(|e| { eprintln!("Import Error: {}", e); process::exit(1); });
+        let class = format!("native:{}", pkg_name);
+        env.native_modules.insert(class.clone(), Rc::new(module));
+        Scope::set_declare(&env.scope, alias.unwrap_or(pkg_name), Value::Object(create_builtin_module(&class)), false);
+        return;
     }
     let init_path = package_manager::package_init_path(&env.package_root, pkg_name)
         .unwrap_or_else(|msg| { eprintln!("Import Error: {}", msg); process::exit(1); })
