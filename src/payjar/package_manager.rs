@@ -87,6 +87,24 @@ fn safe_lock_version(version: &str) -> bool {
         && version.bytes().all(|c| c.is_ascii_alphanumeric() || matches!(c, b'.' | b'_' | b'-' | b'+'))
 }
 
+pub fn native_library_path(root: &Path, name: &str) -> Result<Option<PathBuf>, String> {
+    if root.join(name).join("init.pj").is_file() { return Ok(None); }
+    let path = root.join("pjpm.lock");
+    if !path.is_file() { return Ok(None); }
+    let lock: serde_json::Value = serde_json::from_str(&fs::read_to_string(path).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    let Some(record) = lock.get("packages").and_then(|p| p.as_array()).and_then(|p| p.iter().find(|r| r.get("name").and_then(|v| v.as_str()) == Some(name))) else { return Ok(None); };
+    let version = record.get("version").and_then(|v| v.as_str()).filter(|v| safe_lock_version(v)).ok_or("Invalid package version")?;
+    let installed = root.join(".pjpm/packages").join(name).join(version);
+    if installed.join("init.pj").is_file() { return Ok(None); }
+    let marker = installed.join(".pjpm-native.json");
+    if !marker.is_file() { return Ok(None); }
+    let meta: serde_json::Value = serde_json::from_str(&fs::read_to_string(marker).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    let lib = meta.get("library").and_then(|v| v.as_str()).ok_or("Missing native library path")?;
+    let candidate = installed.join(lib).canonicalize().map_err(|e| e.to_string())?;
+    if !candidate.starts_with(installed.canonicalize().map_err(|e| e.to_string())?) { return Err("Native library escapes package directory".into()); }
+    Ok(Some(candidate))
+}
+
 pub fn package_init_path(project_root: &Path, name: &str) -> Result<PathBuf, String> {
     // Explicit local package sources win over anything from the package manager.
     let local = project_root.join(name).join("init.pj");
