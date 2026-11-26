@@ -589,6 +589,24 @@ def build_dependencies(records, approved=False):
         args = build.get("args", ["build", "--release"])
         if not isinstance(args, list) or not args or args[0] != "build" or not all(isinstance(x, str) for x in args):
             raise PjpmError(f"{record['name']}: expected Cargo build arguments")
+        runtime = manifest["runtime"]
+        if runtime.get("adapter") == "native":
+            marker = root / ".pjpm-native.json"
+            marker.unlink(missing_ok=True)
+            library = runtime.get("library")
+            if not isinstance(library, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", library):
+                raise PjpmError("invalid native library name")
+            # Fixed target and profile make the installed artifact predictable.
+            target = (root / "target").resolve()
+            code = run_vector(["cargo", "build", "--release", "--lib", "--target-dir", str(target)], cwd=root)
+            if code:
+                raise PjpmError(f"{record['name']}: native build failed with exit code {code}")
+            filename = library + ".dll" if sys.platform == "win32" else "lib" + library + (".dylib" if sys.platform == "darwin" else ".so")
+            artifact = target / "release" / filename
+            if not artifact.is_file():
+                raise PjpmError(f"{record['name']}: native build produced no {filename}")
+            marker.write_text(json.dumps({"library": "target/release/" + filename, "abi": 1}) + "\n", encoding="utf-8")
+            continue
         code = run_vector(["cargo", *args], cwd=root)
         if code:
             raise PjpmError(f"{record['name']}: Cargo build failed with exit code {code}")
