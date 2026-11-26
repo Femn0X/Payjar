@@ -1540,7 +1540,8 @@ fn load_folder_package(env: &mut Env, pkg_name: &str, alias: Option<&str>, debug
     if pkg_name.is_empty() || !pkg_name.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-') {
         eprintln!("Import Error: invalid package name '{}'", pkg_name); process::exit(1);
     }
-    if let Ok(Some(path)) = package_manager::native_library_path(&env.package_root, pkg_name) {
+    if let Some(path) = package_manager::native_library_path(&env.package_root, pkg_name)
+        .unwrap_or_else(|e| { eprintln!("Import Error: {}", e); process::exit(1); }) {
         let module = native_bridge::NativeModule::load(&path).unwrap_or_else(|e| { eprintln!("Import Error: {}", e); process::exit(1); });
         let class = format!("native:{}", pkg_name);
         env.native_modules.insert(class.clone(), Rc::new(module));
